@@ -196,6 +196,35 @@ fn cem_returns_configured_fallback_when_deadline_prevents_iteration() -> anyhow:
 }
 
 #[test]
+fn cem_seed_replays_same_candidate_sequence() -> anyhow::Result<()> {
+    let device = Device::Cpu;
+    let dtype = DType::F32;
+    let state_dim = 12;
+    let action_dim = 4;
+    let model = TdMpc2::new(
+        TdMpc2Config::state_only(state_dim, action_dim),
+        empty_vb(dtype, &device),
+    )?;
+    let mut session = TdMpc2Session::new(model, device.clone(), dtype);
+    let state = Tensor::randn(0f32, 1f32, (2, state_dim), &device)?;
+    session.reset_state(&state)?;
+
+    let mut cem_cfg = CemConfig::new(3, 8, 3, action_dim);
+    cem_cfg.iterations = 2;
+    cem_cfg.seed = Some(42);
+
+    let first = CemPlanner::new(cem_cfg.clone()).plan(&session)?;
+    let second = CemPlanner::new(cem_cfg).plan(&session)?;
+
+    assert_eq!(
+        first.sequence.to_vec3::<f32>()?,
+        second.sequence.to_vec3::<f32>()?
+    );
+    assert_eq!(first.best_indices, second.best_indices);
+    Ok(())
+}
+
+#[test]
 fn mppi_returns_configured_fallback_when_deadline_prevents_iteration() -> anyhow::Result<()> {
     let device = Device::Cpu;
     let dtype = DType::F32;

@@ -262,6 +262,10 @@ overhead.
   MPPI use a configured fallback action, while iCEM prefers its warm-start
   sequence before falling back to the configured action. `PlanResult::fallback`
   reports which path was used.
+- Planner configs expose an optional seed for deterministic host-generated
+  candidate noise that is moved to the selected Candle device, giving CPU/CUDA
+  planner tests a repeatable sampling path while leaving deployment defaults
+  backend-native.
 
 **Done When**
 
