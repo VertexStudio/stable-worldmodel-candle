@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle_nn::ops;
 
 use crate::session::{LeWmSession, TdMpc2Session};
 
@@ -166,6 +167,55 @@ impl CemConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MppiConfig {
+    pub horizon: usize,
+    pub samples: usize,
+    pub iterations: usize,
+    pub action_dim: usize,
+    pub action_bounds: ActionBounds,
+    pub noise_std: f32,
+    pub temperature: f32,
+    pub deadline: Option<Duration>,
+}
+
+impl MppiConfig {
+    pub fn new(horizon: usize, samples: usize, action_dim: usize) -> Self {
+        Self {
+            horizon,
+            samples,
+            iterations: 1,
+            action_dim,
+            action_bounds: ActionBounds::symmetric(action_dim, 1.0),
+            noise_std: 1.0,
+            temperature: 1.0,
+            deadline: None,
+        }
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.horizon == 0 {
+            candle::bail!("MPPI horizon must be greater than zero");
+        }
+        if self.samples == 0 {
+            candle::bail!("MPPI samples must be greater than zero");
+        }
+        if self.iterations == 0 {
+            candle::bail!("MPPI iterations must be greater than zero");
+        }
+        if self.action_dim == 0 {
+            candle::bail!("MPPI action_dim must be greater than zero");
+        }
+        if !self.noise_std.is_finite() || self.noise_std <= 0.0 {
+            candle::bail!("MPPI noise_std must be finite and greater than zero");
+        }
+        if !self.temperature.is_finite() || self.temperature <= 0.0 {
+            candle::bail!("MPPI temperature must be finite and greater than zero");
+        }
+        self.action_bounds.validate(self.action_dim)
+    }
+}
+
 #[derive(Debug)]
 pub struct PlanResult {
     pub first_action: Tensor,
@@ -214,7 +264,8 @@ impl CemPlanner {
                 break;
             }
 
-            let candidates = sample_candidates(&mean, &std, cfg, dtype, device)?;
+            let candidates =
+                sample_candidates(&mean, &std, cfg.samples, &cfg.action_bounds, dtype, device)?;
             let scores = scorer.score_candidates(&candidates)?;
             validate_scores_shape(&scores, batch, cfg.samples)?;
             let (elites, _) = select_elites(&candidates, &scores, cfg.elites)?;
@@ -248,6 +299,71 @@ impl CemPlanner {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MppiPlanner {
+    config: MppiConfig,
+}
+
+impl MppiPlanner {
+    pub fn new(config: MppiConfig) -> Self {
+        Self { config }
+    }
+
+    pub fn config(&self) -> &MppiConfig {
+        &self.config
+    }
+
+    pub fn plan<S: CandidateScorer>(&self, scorer: &S) -> Result<PlanResult> {
+        self.config.validate()?;
+        let start = Instant::now();
+        let device = scorer.device();
+        let dtype = scorer.dtype();
+        let cfg = &self.config;
+        let batch = scorer.batch_size().unwrap_or(1);
+
+        let mut mean = Tensor::zeros((batch, cfg.horizon, cfg.action_dim), dtype, device)?;
+        let std = Tensor::ones((batch, cfg.horizon, cfg.action_dim), dtype, device)?
+            .affine(cfg.noise_std as f64, 0.0)?;
+        let mut last_scores = None;
+        let mut iterations_completed = 0;
+        let mut deadline_reached = false;
+
+        for iter_idx in 0..cfg.iterations {
+            if iter_idx > 0 && deadline_elapsed(start, cfg.deadline) {
+                deadline_reached = true;
+                break;
+            }
+
+            let candidates =
+                sample_candidates(&mean, &std, cfg.samples, &cfg.action_bounds, dtype, device)?;
+            let scores = scorer.score_candidates(&candidates)?;
+            validate_scores_shape(&scores, batch, cfg.samples)?;
+            mean = mppi_weighted_sequence(&candidates, &scores, cfg.temperature)?;
+
+            last_scores = Some(scores);
+            iterations_completed += 1;
+        }
+
+        let scores = last_scores
+            .ok_or_else(|| candle::Error::Msg("MPPI did not produce scores".to_string()))?;
+        let best_indices = best_indices_from_scores(&scores)?;
+        let sequence = mean;
+        let first_action = sequence.i((.., 0, ..))?;
+        let elapsed = start.elapsed();
+
+        Ok(PlanResult {
+            first_action,
+            sequence,
+            scores,
+            best_indices,
+            iterations_completed,
+            elapsed,
+            deadline_reached,
+            used_host_elite_selection: false,
+        })
+    }
+}
+
 fn deadline_elapsed(start: Instant, deadline: Option<Duration>) -> bool {
     deadline.is_some_and(|deadline| start.elapsed() >= deadline)
 }
@@ -255,17 +371,35 @@ fn deadline_elapsed(start: Instant, deadline: Option<Duration>) -> bool {
 fn sample_candidates(
     mean: &Tensor,
     std: &Tensor,
-    cfg: &CemConfig,
+    samples: usize,
+    bounds: &ActionBounds,
     dtype: DType,
     device: &Device,
 ) -> Result<Tensor> {
     let batch = mean.dim(0)?;
-    let shape = (batch, cfg.samples, cfg.horizon, cfg.action_dim);
+    let (_, horizon, action_dim) = mean.dims3()?;
+    let shape = (batch, samples, horizon, action_dim);
     let noise = Tensor::randn(0f32, 1f32, shape, device)?.to_dtype(dtype)?;
     let mean = mean.unsqueeze(1)?.broadcast_as(shape)?;
     let std = std.unsqueeze(1)?.broadcast_as(shape)?;
     let candidates = mean.broadcast_add(&noise.broadcast_mul(&std)?)?;
-    clamp_actions(&candidates, &cfg.action_bounds, dtype, device)
+    clamp_actions(&candidates, bounds, dtype, device)
+}
+
+fn mppi_weighted_sequence(
+    candidates: &Tensor,
+    scores: &Tensor,
+    temperature: f32,
+) -> Result<Tensor> {
+    let (batch, samples, horizon, action_dim) = candidates.dims4()?;
+    let min_score = scores.min_keepdim(1)?;
+    let logits = scores
+        .broadcast_sub(&min_score)?
+        .affine(-(1.0 / temperature as f64), 0.0)?;
+    let weights = ops::softmax(&logits, 1)?
+        .reshape((batch, samples, 1, 1))?
+        .broadcast_as((batch, samples, horizon, action_dim))?;
+    candidates.broadcast_mul(&weights)?.sum(1)
 }
 
 fn clamp_actions(

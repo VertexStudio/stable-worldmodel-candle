@@ -264,28 +264,31 @@ candidate scoring methods that reuse the cached current context.
 
 ## Planning Solvers
 
-`planner::CemPlanner` provides the first Rust-native MPC solver surface. It
-generates action candidates shaped `[batch, samples, horizon, action_dim]`,
-scores them through a `CandidateScorer`, updates the CEM distribution from the
-elite set, and returns the first action plus the selected sequence:
+`planner::CemPlanner` and `planner::MppiPlanner` provide the first Rust-native
+MPC solver surfaces. They generate action candidates shaped
+`[batch, samples, horizon, action_dim]`, score them through a `CandidateScorer`,
+and return the first action plus the planned sequence:
 
 ```rust
-use stable_worldmodel_candle::planner::{CemConfig, CemPlanner};
+use stable_worldmodel_candle::planner::{CemConfig, CemPlanner, MppiConfig, MppiPlanner};
 
-let planner = CemPlanner::new(CemConfig::new(5, 512, 64, action_dim));
-let result = planner.plan(&tdmpc2_session)?;
-let action = result.first_action;
+let cem = CemPlanner::new(CemConfig::new(5, 512, 64, action_dim));
+let cem_action = cem.plan(&tdmpc2_session)?.first_action;
+
+let mppi = MppiPlanner::new(MppiConfig::new(5, 512, action_dim));
+let mppi_action = mppi.plan(&tdmpc2_session)?.first_action;
 ```
 
 `TdMpc2Session` implements `CandidateScorer` directly. For LeWM, wrap a reset
 session and goal embedding with `planner::LeWmGoalScorer`.
 
-The current CEM implementation keeps candidate tensors, model rollout, and
-scoring on the selected Candle device. Elite ranking is intentionally marked in
+Both planners keep candidate tensors, model rollout, and scoring on the
+selected Candle device. MPPI also computes its softmax-weighted control update
+on the selected Candle device. CEM elite ranking is intentionally marked in
 `PlanResult::used_host_elite_selection`: Candle 0.10 does not expose a general
 top-k/sort primitive, so scores are copied to the host for ranking and elite
-indices are moved back to the device for `index_select`. MPPI/iCEM and a
-device-native elite-selection path remain planned solver work.
+indices are moved back to the device for `index_select`. iCEM and a
+device-native CEM elite-selection path remain planned solver work.
 
 ## Source Layout
 
@@ -336,6 +339,6 @@ checkpoint plus config.
 
 - Add compact fixture integration tests once small public test weights are available.
 - Add TD-MPC2 pixel CNN support and policy rollout sampling.
-- Add MPPI/iCEM planner loops and remove CEM host elite ranking once Candle has a practical device-native top-k/sort path.
+- Add iCEM planner loops and remove CEM host elite ranking once Candle has a practical device-native top-k/sort path.
 - Add optional safetensors export guidance for deployments that prefer mmap loading.
 - Add additional sibling model backends starting from the simplest production inference path for each model.

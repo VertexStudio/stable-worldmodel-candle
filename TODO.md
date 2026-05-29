@@ -42,6 +42,8 @@ predictable and deployment practical.
   generation, rollout/scoring, and elite gathering in Candle tensors, but it
   currently ranks scores on the host because Candle 0.10 has no general
   top-k/sort primitive.
+- MPPI exists and keeps its softmax-weighted control update in Candle tensors
+  on the selected device.
 - Deployment interfaces are currently the Rust library plus CLI tools. A C ABI
   is still pending.
 
@@ -233,6 +235,7 @@ overhead.
 **Status**
 
 - CEM is implemented through `planner::CemPlanner`.
+- MPPI is implemented through `planner::MppiPlanner`.
 - `TdMpc2Session` implements the planner scorer interface directly.
 - `LeWmGoalScorer` adapts `LeWmSession` plus a goal embedding to the same
   scorer interface.
