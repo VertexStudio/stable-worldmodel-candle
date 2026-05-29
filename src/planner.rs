@@ -117,6 +117,7 @@ pub struct CemConfig {
     pub init_std: f32,
     pub min_std: f32,
     pub deadline: Option<Duration>,
+    pub fallback_action: Option<Vec<f32>>,
 }
 
 impl CemConfig {
@@ -131,6 +132,7 @@ impl CemConfig {
             init_std: 1.0,
             min_std: 1e-3,
             deadline: None,
+            fallback_action: None,
         }
     }
 
@@ -163,7 +165,13 @@ impl CemConfig {
         if !self.min_std.is_finite() || self.min_std < 0.0 {
             candle::bail!("CEM min_std must be finite and non-negative");
         }
-        self.action_bounds.validate(self.action_dim)
+        self.action_bounds.validate(self.action_dim)?;
+        validate_fallback_action(
+            self.fallback_action.as_deref(),
+            self.action_dim,
+            &self.action_bounds,
+            "CEM",
+        )
     }
 }
 
@@ -177,6 +185,7 @@ pub struct MppiConfig {
     pub noise_std: f32,
     pub temperature: f32,
     pub deadline: Option<Duration>,
+    pub fallback_action: Option<Vec<f32>>,
 }
 
 impl MppiConfig {
@@ -190,6 +199,7 @@ impl MppiConfig {
             noise_std: 1.0,
             temperature: 1.0,
             deadline: None,
+            fallback_action: None,
         }
     }
 
@@ -212,7 +222,13 @@ impl MppiConfig {
         if !self.temperature.is_finite() || self.temperature <= 0.0 {
             candle::bail!("MPPI temperature must be finite and greater than zero");
         }
-        self.action_bounds.validate(self.action_dim)
+        self.action_bounds.validate(self.action_dim)?;
+        validate_fallback_action(
+            self.fallback_action.as_deref(),
+            self.action_dim,
+            &self.action_bounds,
+            "MPPI",
+        )
     }
 }
 
@@ -228,6 +244,7 @@ pub struct IcemConfig {
     pub init_std: f32,
     pub min_std: f32,
     pub deadline: Option<Duration>,
+    pub fallback_action: Option<Vec<f32>>,
 }
 
 impl IcemConfig {
@@ -243,6 +260,7 @@ impl IcemConfig {
             init_std: 1.0,
             min_std: 1e-3,
             deadline: None,
+            fallback_action: None,
         }
     }
 
@@ -282,8 +300,21 @@ impl IcemConfig {
         if !self.min_std.is_finite() || self.min_std < 0.0 {
             candle::bail!("iCEM min_std must be finite and non-negative");
         }
-        self.action_bounds.validate(self.action_dim)
+        self.action_bounds.validate(self.action_dim)?;
+        validate_fallback_action(
+            self.fallback_action.as_deref(),
+            self.action_dim,
+            &self.action_bounds,
+            "iCEM",
+        )
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanFallback {
+    None,
+    WarmStart,
+    ConfiguredAction,
 }
 
 #[derive(Debug)]
@@ -295,6 +326,7 @@ pub struct PlanResult {
     pub iterations_completed: usize,
     pub elapsed: Duration,
     pub deadline_reached: bool,
+    pub fallback: PlanFallback,
     pub used_host_elite_selection: bool,
 }
 
@@ -329,8 +361,20 @@ impl CemPlanner {
         let mut deadline_reached = false;
 
         for iter_idx in 0..cfg.iterations {
-            if iter_idx > 0 && deadline_elapsed(start, cfg.deadline) {
+            if deadline_elapsed(start, cfg.deadline) {
                 deadline_reached = true;
+                if iter_idx == 0 {
+                    return configured_fallback_result(
+                        cfg.fallback_action.as_deref(),
+                        batch,
+                        cfg.horizon,
+                        cfg.action_dim,
+                        dtype,
+                        device,
+                        start,
+                        "CEM",
+                    );
+                }
                 break;
             }
 
@@ -366,6 +410,7 @@ impl CemPlanner {
             iterations_completed,
             elapsed,
             deadline_reached,
+            fallback: PlanFallback::None,
             used_host_elite_selection: false,
         })
     }
@@ -401,8 +446,20 @@ impl MppiPlanner {
         let mut deadline_reached = false;
 
         for iter_idx in 0..cfg.iterations {
-            if iter_idx > 0 && deadline_elapsed(start, cfg.deadline) {
+            if deadline_elapsed(start, cfg.deadline) {
                 deadline_reached = true;
+                if iter_idx == 0 {
+                    return configured_fallback_result(
+                        cfg.fallback_action.as_deref(),
+                        batch,
+                        cfg.horizon,
+                        cfg.action_dim,
+                        dtype,
+                        device,
+                        start,
+                        "MPPI",
+                    );
+                }
                 break;
             }
 
@@ -433,6 +490,7 @@ impl MppiPlanner {
             iterations_completed,
             elapsed,
             deadline_reached,
+            fallback: PlanFallback::None,
             used_host_elite_selection: false,
         })
     }
@@ -486,8 +544,29 @@ impl IcemPlanner {
         let mut deadline_reached = false;
 
         for iter_idx in 0..cfg.iterations {
-            if iter_idx > 0 && deadline_elapsed(start, cfg.deadline) {
+            if deadline_elapsed(start, cfg.deadline) {
                 deadline_reached = true;
+                if iter_idx == 0 {
+                    if let Some(sequence) = self.fallback_warm_start(batch, dtype, device)? {
+                        return fallback_plan_result(
+                            sequence,
+                            dtype,
+                            device,
+                            start,
+                            PlanFallback::WarmStart,
+                        );
+                    }
+                    return configured_fallback_result(
+                        cfg.fallback_action.as_deref(),
+                        batch,
+                        cfg.horizon,
+                        cfg.action_dim,
+                        dtype,
+                        device,
+                        start,
+                        "iCEM",
+                    );
+                }
                 break;
             }
 
@@ -535,6 +614,7 @@ impl IcemPlanner {
             iterations_completed,
             elapsed,
             deadline_reached,
+            fallback: PlanFallback::None,
             used_host_elite_selection: false,
         })
     }
@@ -554,10 +634,123 @@ impl IcemPlanner {
             None => Tensor::zeros(shape, dtype, device),
         }
     }
+
+    fn fallback_warm_start(
+        &self,
+        batch: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Option<Tensor>> {
+        let cfg = &self.config;
+        match self.warm_start.as_ref() {
+            Some(sequence) if sequence.dims() == [batch, cfg.horizon, cfg.action_dim] => {
+                Ok(Some(sequence.to_device(device)?.to_dtype(dtype)?))
+            }
+            Some(sequence) => candle::bail!(
+                "iCEM warm-start shape {:?} does not match expected {:?}",
+                sequence.dims(),
+                [batch, cfg.horizon, cfg.action_dim]
+            ),
+            None => Ok(None),
+        }
+    }
 }
 
 fn deadline_elapsed(start: Instant, deadline: Option<Duration>) -> bool {
     deadline.is_some_and(|deadline| start.elapsed() >= deadline)
+}
+
+fn validate_fallback_action(
+    fallback_action: Option<&[f32]>,
+    action_dim: usize,
+    bounds: &ActionBounds,
+    planner_name: &str,
+) -> Result<()> {
+    let Some(action) = fallback_action else {
+        return Ok(());
+    };
+    if action.len() != action_dim {
+        candle::bail!(
+            "{planner_name} fallback_action length {} must match action_dim {action_dim}",
+            action.len()
+        );
+    }
+    for (idx, (&value, (&low, &high))) in action
+        .iter()
+        .zip(bounds.low.iter().zip(bounds.high.iter()))
+        .enumerate()
+    {
+        if !value.is_finite() {
+            candle::bail!("{planner_name} fallback_action[{idx}] is not finite");
+        }
+        if value < low || value > high {
+            candle::bail!(
+                "{planner_name} fallback_action[{idx}]={value} is outside [{low}, {high}]"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn configured_fallback_result(
+    fallback_action: Option<&[f32]>,
+    batch: usize,
+    horizon: usize,
+    action_dim: usize,
+    dtype: DType,
+    device: &Device,
+    start: Instant,
+    planner_name: &str,
+) -> Result<PlanResult> {
+    let Some(action) = fallback_action else {
+        candle::bail!(
+            "{planner_name} deadline reached before any iteration completed and no fallback_action is configured"
+        );
+    };
+    let sequence =
+        fallback_sequence_from_action(action, batch, horizon, action_dim, dtype, device)?;
+    fallback_plan_result(
+        sequence,
+        dtype,
+        device,
+        start,
+        PlanFallback::ConfiguredAction,
+    )
+}
+
+fn fallback_sequence_from_action(
+    action: &[f32],
+    batch: usize,
+    horizon: usize,
+    action_dim: usize,
+    dtype: DType,
+    device: &Device,
+) -> Result<Tensor> {
+    Tensor::from_vec(action.to_vec(), (1, 1, action_dim), device)?
+        .to_dtype(dtype)?
+        .broadcast_as((batch, horizon, action_dim))
+}
+
+fn fallback_plan_result(
+    sequence: Tensor,
+    dtype: DType,
+    device: &Device,
+    start: Instant,
+    fallback: PlanFallback,
+) -> Result<PlanResult> {
+    let batch = sequence.dim(0)?;
+    let first_action = sequence.i((.., 0, ..))?;
+    Ok(PlanResult {
+        first_action,
+        sequence,
+        scores: Tensor::zeros((batch, 1), dtype, device)?,
+        best_indices: vec![0; batch],
+        iterations_completed: 0,
+        elapsed: start.elapsed(),
+        deadline_reached: true,
+        fallback,
+        used_host_elite_selection: false,
+    })
 }
 
 fn sample_candidates(

@@ -257,6 +257,10 @@ overhead.
   false for the built-in planners.
 - `runtime-bench --model td-mpc2` reports CEM, MPPI, and iCEM planner latency
   using the same session/scorer path as deployment code.
+- Deadline fallback is implemented for zero-completed-iteration cases: CEM and
+  MPPI use a configured fallback action, while iCEM prefers its warm-start
+  sequence before falling back to the configured action. `PlanResult::fallback`
+  reports which path was used.
 
 **Done When**
 
@@ -289,9 +293,12 @@ Make control-loop timing predictable.
 
 **Done When**
 
+- Deadline fallback behavior is validated across CEM/MPPI/iCEM.
 - Deadline behavior is deterministic and tested.
-- Benchmarks report full planning latency. Fallback rates are pending fallback
-  policy support.
+- Benchmarks report full planning latency. Fallback-rate reporting remains
+  pending.
+- Buffer reuse and allocation reduction are benchmarked and implemented where
+  they reduce steady-state planner latency.
 - Repeated planning loops show lower p95/p99 latency after optimization.
 
 ## Phase 8: Precision Modes

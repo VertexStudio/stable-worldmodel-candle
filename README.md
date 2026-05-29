@@ -352,7 +352,18 @@ These planners keep candidate tensors, model rollout, and scoring on the
 selected Candle device. CEM and iCEM use Candle sort/gather ops for elite
 selection instead of host-side ranking, and MPPI computes its softmax-weighted
 control update on the selected Candle device. iCEM carries elites between
-iterations and keeps a shifted warm-start sequence between `plan` calls.
+iterations and keeps a shifted warm-start sequence between `plan` calls. If a
+deadline expires before any iteration completes, CEM/MPPI can return a
+configured fallback action and iCEM first tries its previous warm-start
+sequence. `PlanResult::fallback` identifies whether a returned action came from
+normal planning, a warm-start fallback, or a configured fallback action.
+
+Latest local planner fallback validation, run on 2026-05-29:
+
+- `cargo test --locked` passed.
+- `cargo test --locked --features cuda` passed.
+- Fallback tests cover CEM/MPPI configured-action fallback and iCEM warm-start
+  fallback without requiring the scorer/session to be reset.
 
 ## C ABI
 
