@@ -99,6 +99,12 @@ not present. `schema.json` describes observation names, observation kinds
 `preprocess.json` records runtime preprocessing metadata such as image size,
 normalization, and action bounds.
 
+Core preprocessing currently supports already-decoded RGB frame buffers and
+state/action arrays without adding image or video decoding dependencies. RGB
+frames can be resized, normalized, stacked as `[batch, time, channels, height,
+width]`, and moved to the selected Candle device. Optional file/video decoding
+can be layered on top of this later without changing the core tensor path.
+
 For backend parity, generate CPU and CUDA Python fixtures from identical CPU
 input tensors, then compare them before comparing Candle:
 
