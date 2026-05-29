@@ -14,7 +14,7 @@ helpers live at the crate root, and CLIs select a backend explicitly.
 - `models::tdmpc2`: state/vector observation encoder, latent dynamics, reward/Q heads, actor mean action, and candidate cost scoring.
 - Loading from PyTorch `.pt` state dicts via `VarBuilder::from_pth`, or from `.safetensors`.
 - Optional Hugging Face Hub checkpoint download support behind `--features hub`.
-- Rust 2024 edition with local Candle path dependencies from `../candle`.
+- Rust 2024 edition with published Candle crates.
 - Backend-specific shape smoke-test CLIs:
 
 ```bash
