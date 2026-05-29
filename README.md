@@ -100,6 +100,30 @@ cargo run --bin tdmpc2-compare-fixture -- \
   --weights target/tdmpc2-state-weights.pt
 ```
 
+The same exporter and comparator cover pixel-only and mixed pixel+state
+fixtures:
+
+```bash
+cd stable-worldmodel
+uv run --python 3.12 --no-dev \
+  --with imageio \
+  python ../stable-worldmodel-candle/tools/export_tdmpc2_fixture.py \
+  --stable-worldmodel-root . \
+  --fixture-kind pixel \
+  --device cpu \
+  --output ../stable-worldmodel-candle/target/tdmpc2-pixel-python-cpu.npz \
+  --weights-output ../stable-worldmodel-candle/target/tdmpc2-pixel-weights.pt
+
+cd ../stable-worldmodel-candle
+cargo run --bin tdmpc2-compare-fixture -- \
+  --fixture target/tdmpc2-pixel-python-cpu.npz \
+  --weights target/tdmpc2-pixel-weights.pt \
+  --fixture-kind pixel
+```
+
+Use `--fixture-kind both` on both commands to validate combined pixel+state
+encoding.
+
 ## Deployment Artifacts
 
 The preferred runtime package is a directory with explicit model, preprocessing,
@@ -232,6 +256,21 @@ Latest local CUDA parity result, run on 2026-05-29:
 For the Python CPU/CUDA fixture comparison, `pixels`, `actions`, and
 `action_candidates` were byte-identical because inputs are generated on CPU
 before being copied to the selected backend.
+
+Latest local TD-MPC2 pixel parity result, run on 2026-05-29:
+
+- Python CPU vs Python CUDA fixture drift: `z=1.490116e-08`,
+  `next_z=1.490116e-07`, `actor_mean=1.639128e-07`, `cost=0`, cost argmin
+  stable.
+- Candle CPU vs Python CPU pixel fixture: `z=2.980232e-08`,
+  `next_z=2.384186e-07`, `actor_mean=4.470348e-07`,
+  `cost=1.907349e-06`, cost argmin stable.
+- Candle CUDA vs Python CUDA pixel fixture: `z=2.235174e-08`,
+  `next_z=1.490116e-07`, `actor_mean=2.682209e-07`, `cost=0`, cost argmin
+  stable.
+- Candle CPU vs Python CPU mixed pixel+state fixture: `z=1.192093e-07`,
+  `next_z=6.258488e-07`, `actor_mean=2.607703e-07`,
+  `cost=1.907349e-06`, cost argmin stable.
 
 ## Runtime Benchmarks
 

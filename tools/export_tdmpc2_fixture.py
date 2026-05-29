@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export deterministic TD-MPC2 state/vector fixtures from Python."""
+"""Export deterministic TD-MPC2 fixtures from Python."""
 
 from __future__ import annotations
 
@@ -33,20 +33,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--horizon", type=int, default=3)
+    parser.add_argument(
+        "--fixture-kind",
+        choices=("state", "pixel", "both"),
+        default="state",
+        help="observation path to export",
+    )
     parser.add_argument("--state-dim", type=int, default=12)
+    parser.add_argument("--image-size", type=int, default=64)
+    parser.add_argument("--pixel-dim", type=int, default=128)
     parser.add_argument("--action-dim", type=int, default=4)
     parser.add_argument("--seed", type=int, default=11)
     return parser.parse_args()
 
 
 def cfg(args: argparse.Namespace) -> DotDict:
+    encoding = {}
+    extra_dims = {}
+    if args.fixture_kind in ("pixel", "both"):
+        encoding["pixels"] = args.pixel_dim
+    if args.fixture_kind in ("state", "both"):
+        encoding["state"] = 128
+        extra_dims["state"] = args.state_dim
+
     return DotDict(
         action_dim=args.action_dim,
-        image_size=64,
-        extra_dims={"state": args.state_dim},
+        image_size=args.image_size,
+        extra_dims=extra_dims,
         wm=DotDict(
             tau=0.01,
-            encoding={"state": 128},
+            encoding=encoding,
             enc_dim=256,
             mlp_dim=384,
             simnorm_dim=8,
@@ -91,7 +107,23 @@ def main() -> None:
     model = model.to(device)
 
     with torch.no_grad():
-        state = torch.randn(args.batch_size, args.state_dim, dtype=torch.float32)
+        obs_cpu = {}
+        obs_device = {}
+        if args.fixture_kind in ("state", "both"):
+            state = torch.randn(args.batch_size, args.state_dim, dtype=torch.float32)
+            obs_cpu["state"] = state
+            obs_device["state"] = state.to(device)
+        if args.fixture_kind in ("pixel", "both"):
+            pixels = torch.randn(
+                args.batch_size,
+                3,
+                args.image_size,
+                args.image_size,
+                dtype=torch.float32,
+            )
+            obs_cpu["pixels"] = pixels
+            obs_device["pixels"] = pixels.to(device)
+
         action = torch.randn(args.batch_size, args.action_dim, dtype=torch.float32).clamp(
             -1.0, 1.0
         )
@@ -103,19 +135,16 @@ def main() -> None:
             dtype=torch.float32,
         ).clamp(-1.0, 1.0)
 
-        state_device = state.to(device)
         action_device = action.to(device)
         action_candidates_device = action_candidates.to(device)
 
-        z = model.encode({"state": state_device}).contiguous()
+        z = model.encode(obs_device).contiguous()
         next_z, reward_logits = model.forward(z, action_device)
         actor_mean = torch.tanh(model.pi(z).chunk(2, dim=-1)[0]).contiguous()
-        cost = model.get_cost({"state": state_device}, action_candidates_device).contiguous()
+        cost = model.get_cost(obs_device, action_candidates_device).contiguous()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(
-        args.output,
-        state=tensor_to_numpy(state),
+    arrays = dict(
         action=tensor_to_numpy(action),
         action_candidates=tensor_to_numpy(action_candidates),
         z=tensor_to_numpy(z),
@@ -124,6 +153,9 @@ def main() -> None:
         actor_mean=tensor_to_numpy(actor_mean),
         cost=tensor_to_numpy(cost),
     )
+    for name, tensor in obs_cpu.items():
+        arrays[name] = tensor_to_numpy(tensor)
+    np.savez(args.output, **arrays)
 
     print(f"fixture={args.output}")
     print(f"weights={args.weights_output}")
@@ -135,7 +167,10 @@ def main() -> None:
     print(f"batch_size={args.batch_size}")
     print(f"samples={args.samples}")
     print(f"horizon={args.horizon}")
+    print(f"fixture_kind={args.fixture_kind}")
     print(f"state_dim={args.state_dim}")
+    print(f"image_size={args.image_size}")
+    print(f"pixel_dim={args.pixel_dim}")
     print(f"action_dim={args.action_dim}")
 
 

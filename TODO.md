@@ -33,8 +33,8 @@ predictable and deployment practical.
 - LeWM image-model implementation exists.
 - LeWM Python/Candle CPU/CUDA parity exists through `tools/cuda_parity.sh`.
 - TD-MPC2 state/vector inference and CPU/CUDA fixture parity exist.
-- TD-MPC2 pixel CNN inference exists for NCHW/NHWC image tensors; pixel fixture
-  parity is still pending.
+- TD-MPC2 pixel CNN inference exists for NCHW/NHWC image tensors with CPU/CUDA
+  fixture parity for pixel-only and CPU fixture parity for mixed pixel+state.
 - Rust preprocessing exists for decoded RGB frames, state arrays, and action
   arrays; optional file/video decode support is still pending.
 - `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
@@ -169,7 +169,8 @@ Make TD-MPC2 usable for both state/vector and pixel observation deployments.
 - TD-MPC2 pixel CNN support is implemented with the upstream conv layout and
   `pixel_encoder` projection.
 - Pixel-only and combined pixel+state encoding are covered by Rust tests.
-- Pixel fixture export/comparison is still pending.
+- Pixel-only fixture export/comparison passes on CPU and CUDA.
+- Mixed pixel+state fixture export/comparison passes on CPU.
 
 **Done When**
 

@@ -9,9 +9,16 @@ use candle::{DType, Tensor};
 use clap::Parser;
 use stable_worldmodel_candle::{
     checkpoint,
-    models::tdmpc2::{TdMpc2, TdMpc2Config},
+    models::tdmpc2::{EncodingConfig, TdMpc2, TdMpc2Config},
     runtime::DeviceSpec,
 };
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum FixtureKind {
+    State,
+    Pixel,
+    Both,
+}
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -21,8 +28,17 @@ struct Args {
     #[arg(long)]
     weights: PathBuf,
 
+    #[arg(long, value_enum, default_value_t = FixtureKind::State)]
+    fixture_kind: FixtureKind,
+
     #[arg(long, default_value_t = 12)]
     state_dim: usize,
+
+    #[arg(long, default_value_t = 64)]
+    image_size: usize,
+
+    #[arg(long, default_value_t = 128)]
+    pixel_dim: usize,
 
     #[arg(long, default_value_t = 4)]
     action_dim: usize,
@@ -40,42 +56,112 @@ struct Args {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let device = args.device.resolve()?;
-    let cfg = TdMpc2Config::state_only(args.state_dim, args.action_dim);
+    let cfg = tdmpc2_config(&args);
     let vb = checkpoint::var_builder_from_path(&args.weights, DType::F32, &device)?;
     let model = TdMpc2::new(cfg, vb)?;
 
-    let arrays = Tensor::read_npz_by_name(
-        &args.fixture,
-        &[
-            "state",
-            "action",
-            "action_candidates",
-            "z",
-            "next_z",
-            "reward_logits",
-            "actor_mean",
-            "cost",
-        ],
-    )?;
-    let state = arrays[0].to_device(&device)?.to_dtype(DType::F32)?;
-    let action = arrays[1].to_device(&device)?.to_dtype(DType::F32)?;
-    let action_candidates = arrays[2].to_device(&device)?.to_dtype(DType::F32)?;
+    let mut names = Vec::new();
+    if matches!(args.fixture_kind, FixtureKind::State | FixtureKind::Both) {
+        names.push("state");
+    }
+    if matches!(args.fixture_kind, FixtureKind::Pixel | FixtureKind::Both) {
+        names.push("pixels");
+    }
+    names.extend([
+        "action",
+        "action_candidates",
+        "z",
+        "next_z",
+        "reward_logits",
+        "actor_mean",
+        "cost",
+    ]);
+    let arrays = Tensor::read_npz_by_name(&args.fixture, &names)?;
+    let mut idx = 0;
+    let state = if matches!(args.fixture_kind, FixtureKind::State | FixtureKind::Both) {
+        let tensor = arrays[idx].to_device(&device)?.to_dtype(DType::F32)?;
+        idx += 1;
+        Some(tensor)
+    } else {
+        None
+    };
+    let pixels = if matches!(args.fixture_kind, FixtureKind::Pixel | FixtureKind::Both) {
+        let tensor = arrays[idx].to_device(&device)?.to_dtype(DType::F32)?;
+        idx += 1;
+        Some(tensor)
+    } else {
+        None
+    };
+    let action = arrays[idx].to_device(&device)?.to_dtype(DType::F32)?;
+    idx += 1;
+    let action_candidates = arrays[idx].to_device(&device)?.to_dtype(DType::F32)?;
+    idx += 1;
+    let expected_z = &arrays[idx];
+    idx += 1;
+    let expected_next_z = &arrays[idx];
+    idx += 1;
+    let expected_reward_logits = &arrays[idx];
+    idx += 1;
+    let expected_actor_mean = &arrays[idx];
+    idx += 1;
+    let expected_cost = &arrays[idx];
 
-    let z = model.encode_state(&state)?;
-    compare("z", &z, &arrays[3], args.tolerance)?;
+    let observations = observations(state.as_ref(), pixels.as_ref());
+    let z = model.encode(&observations)?;
+    compare("z", &z, expected_z, args.tolerance)?;
 
     let (next_z, reward_logits) = model.forward(&z, &action)?;
-    compare("next_z", &next_z, &arrays[4], args.tolerance)?;
-    compare("reward_logits", &reward_logits, &arrays[5], args.tolerance)?;
+    compare("next_z", &next_z, expected_next_z, args.tolerance)?;
+    compare(
+        "reward_logits",
+        &reward_logits,
+        expected_reward_logits,
+        args.tolerance,
+    )?;
 
     let actor_mean = model.actor_mean_action(&z)?;
-    compare("actor_mean", &actor_mean, &arrays[6], args.tolerance)?;
+    compare(
+        "actor_mean",
+        &actor_mean,
+        expected_actor_mean,
+        args.tolerance,
+    )?;
 
-    let cost = model.get_cost_state(&state, &action_candidates)?;
-    compare("cost", &cost, &arrays[7], args.cost_tolerance)?;
-    compare_cost_ordering(&cost, &arrays[7])?;
+    let cost = model.get_cost(&observations, &action_candidates)?;
+    compare("cost", &cost, expected_cost, args.cost_tolerance)?;
+    compare_cost_ordering(&cost, expected_cost)?;
 
     Ok(())
+}
+
+fn tdmpc2_config(args: &Args) -> TdMpc2Config {
+    match args.fixture_kind {
+        FixtureKind::State => TdMpc2Config::state_only(args.state_dim, args.action_dim),
+        FixtureKind::Pixel => {
+            TdMpc2Config::pixel_only(args.image_size, args.action_dim, args.pixel_dim)
+        }
+        FixtureKind::Both => {
+            let mut cfg =
+                TdMpc2Config::pixel_only(args.image_size, args.action_dim, args.pixel_dim);
+            cfg.encodings
+                .push(EncodingConfig::new("state", args.state_dim, 128));
+            cfg
+        }
+    }
+}
+
+fn observations<'a>(
+    state: Option<&'a Tensor>,
+    pixels: Option<&'a Tensor>,
+) -> Vec<(&'static str, &'a Tensor)> {
+    let mut observations = Vec::new();
+    if let Some(pixels) = pixels {
+        observations.push(("pixels", pixels));
+    }
+    if let Some(state) = state {
+        observations.push(("state", state));
+    }
+    observations
 }
 
 fn compare(name: &str, actual: &Tensor, expected: &Tensor, tolerance: f32) -> anyhow::Result<()> {
