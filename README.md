@@ -374,17 +374,23 @@ cargo build --release
 cargo build --release --features cuda
 ```
 
-The initial ABI is intentionally narrow and matches the parity-covered runtime
-path: TD-MPC2 state/vector artifacts with CEM, MPPI, or iCEM planning. C callers
-load a deployment artifact, reset the current state batch, and request an
-action:
+The initial ABI matches the parity-covered TD-MPC2 runtime paths for state,
+pixel, and mixed state+pixel artifacts with CEM, MPPI, or iCEM planning. C
+callers load a deployment artifact, reset the current observation batch, and
+request an action:
 
 ```c
 #include "stable_worldmodel_candle.h"
 
 SwmTdMpc2 *rt = NULL;
 SwmStatus status = swm_tdmpc2_load("/path/to/artifact", "cuda:0", "f32", &rt);
+/* Use the reset call that matches the artifact's observation schema. */
 status = swm_tdmpc2_reset_state(rt, state_f32, batch, state_dim);
+status = swm_tdmpc2_reset_pixels(
+    rt, pixels_f32, batch, image_size, image_size, SWM_PIXEL_LAYOUT_NCHW);
+status = swm_tdmpc2_reset_state_pixels(
+    rt, state_f32, pixels_f32, batch, state_dim, image_size, image_size,
+    SWM_PIXEL_LAYOUT_NCHW);
 status = swm_tdmpc2_plan_cem(rt, cem_cfg, action_out, sequence_out, best_cost_out);
 status = swm_tdmpc2_plan_icem(rt, icem_cfg, action_out, sequence_out, best_cost_out);
 swm_tdmpc2_free(rt);
@@ -392,13 +398,15 @@ swm_tdmpc2_free(rt);
 
 `swm_last_error_message()` returns a thread-local error string after non-OK
 statuses. The matching declarations live in
-`include/stable_worldmodel_candle.h`. `swm_tdmpc2_plan_icem` keeps its shifted
-warm-start sequence inside the runtime handle; call
-`swm_tdmpc2_clear_icem_warm_start` when resetting an episode. The LeWM and pixel
-TD-MPC2 C ABI surfaces remain future work; the Rust API already exposes those
-planner/session pieces where implemented.
+`include/stable_worldmodel_candle.h`. `swm_tdmpc2_reset_pixels` expects f32
+tensors already resized and normalized for the model, with explicit NCHW or
+NHWC layout. `swm_tdmpc2_plan_icem` keeps its shifted warm-start sequence inside
+the runtime handle; call `swm_tdmpc2_clear_icem_warm_start` when resetting an
+episode. The LeWM C ABI surface remains future work; the Rust API already
+exposes those planner/session pieces where implemented.
 
-Latest local C ABI validation after adding iCEM, run on 2026-05-29:
+Latest local C ABI validation after adding pixel and iCEM entrypoints, run on
+2026-05-29:
 
 - `cargo test --locked` passed.
 - `cargo test --locked --features cuda` passed.
@@ -456,5 +464,5 @@ checkpoint plus config.
 - Add TD-MPC2 pixel fixture parity and policy rollout sampling.
 - Add planner buffer reuse/preallocation for lower steady-state allocation cost.
 - Add optional safetensors export guidance for deployments that prefer mmap loading.
-- Expand the C ABI to LeWM and pixel TD-MPC2 once those deployment paths stabilize.
+- Expand the C ABI to LeWM once that deployment path stabilizes.
 - Add additional sibling model backends starting from the simplest production inference path for each model.

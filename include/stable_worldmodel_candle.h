@@ -17,6 +17,11 @@ typedef enum SwmStatus {
   SWM_STATUS_PANIC = 4,
 } SwmStatus;
 
+typedef enum SwmPixelLayout {
+  SWM_PIXEL_LAYOUT_NCHW = 0,
+  SWM_PIXEL_LAYOUT_NHWC = 1,
+} SwmPixelLayout;
+
 typedef struct SwmCemPlanConfig {
   size_t horizon;
   size_t samples;
@@ -55,12 +60,30 @@ void swm_tdmpc2_free(SwmTdMpc2 *handle);
 
 SwmStatus swm_tdmpc2_state_dim(const SwmTdMpc2 *handle, size_t *out);
 
+SwmStatus swm_tdmpc2_image_size(const SwmTdMpc2 *handle, size_t *out);
+
 SwmStatus swm_tdmpc2_action_dim(const SwmTdMpc2 *handle, size_t *out);
 
 SwmStatus swm_tdmpc2_reset_state(SwmTdMpc2 *handle,
                                  const float *state,
                                  size_t batch,
                                  size_t state_dim);
+
+SwmStatus swm_tdmpc2_reset_pixels(SwmTdMpc2 *handle,
+                                  const float *pixels,
+                                  size_t batch,
+                                  size_t height,
+                                  size_t width,
+                                  SwmPixelLayout layout);
+
+SwmStatus swm_tdmpc2_reset_state_pixels(SwmTdMpc2 *handle,
+                                        const float *state,
+                                        const float *pixels,
+                                        size_t batch,
+                                        size_t state_dim,
+                                        size_t height,
+                                        size_t width,
+                                        SwmPixelLayout layout);
 
 SwmStatus swm_tdmpc2_plan_cem(SwmTdMpc2 *handle,
                               SwmCemPlanConfig config,

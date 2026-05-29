@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    ffi::{CStr, CString, c_char},
+    ffi::{CStr, CString, c_char, c_int},
     panic::{AssertUnwindSafe, catch_unwind},
     ptr,
 };
@@ -107,9 +107,17 @@ impl Default for SwmIcemPlanConfig {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwmPixelLayout {
+    Nchw = 0,
+    Nhwc = 1,
+}
+
 pub struct SwmTdMpc2 {
     session: TdMpc2Session,
-    state_dim: usize,
+    state_dim: Option<usize>,
+    image_size: Option<usize>,
     action_dim: usize,
     action_bounds: ActionBounds,
     icem_planner: Option<IcemPlanner>,
@@ -154,7 +162,7 @@ pub unsafe extern "C" fn swm_tdmpc2_load(
                 "swm_tdmpc2_load only supports tdmpc2 artifacts",
             ));
         };
-        let state_dim = tdmpc2_state_dim(&config)?;
+        let (state_dim, image_size) = tdmpc2_observation_dims(&config)?;
         let action_dim = config.action_dim;
         let action_bounds =
             action_bounds_from_schema(&artifact.schema, &artifact.preprocess, action_dim)?;
@@ -163,6 +171,7 @@ pub unsafe extern "C" fn swm_tdmpc2_load(
         let handle = Box::new(SwmTdMpc2 {
             session,
             state_dim,
+            image_size,
             action_dim,
             action_bounds,
             icem_planner: None,
@@ -189,7 +198,20 @@ pub unsafe extern "C" fn swm_tdmpc2_state_dim(
     ffi_guard(|| {
         let handle = unsafe { required_ref(handle, "handle")? };
         let out = unsafe { required_mut(out, "out")? };
-        *out = handle.state_dim;
+        *out = handle.state_dim.unwrap_or(0);
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_tdmpc2_image_size(
+    handle: *const SwmTdMpc2,
+    out: *mut usize,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_ref(handle, "handle")? };
+        let out = unsafe { required_mut(out, "out")? };
+        *out = handle.image_size.unwrap_or(0);
         Ok(())
     })
 }
@@ -216,24 +238,65 @@ pub unsafe extern "C" fn swm_tdmpc2_reset_state(
 ) -> SwmStatus {
     ffi_guard(|| {
         let handle = unsafe { required_mut(handle, "handle")? };
-        if batch == 0 {
-            return Err(FfiError::invalid("batch must be greater than zero"));
+        if handle.state_dim.is_some() && handle.image_size.is_some() {
+            return Err(FfiError::invalid(
+                "TD-MPC2 artifact also requires pixels; use swm_tdmpc2_reset_state_pixels",
+            ));
         }
-        if state_dim != handle.state_dim {
-            return Err(FfiError::invalid(format!(
-                "state_dim {state_dim} does not match runtime state_dim {}",
-                handle.state_dim
-            )));
-        }
-        let len = batch
-            .checked_mul(state_dim)
-            .ok_or_else(|| FfiError::invalid("state length overflow"))?;
-        let state = unsafe { required_slice(state, len, "state")? };
-        let state = Tensor::from_slice(state, (batch, state_dim), handle.session.device())
-            .map_err(FfiError::runtime)?;
+        let state = unsafe { state_tensor_from_ffi(handle, state, batch, state_dim)? };
         handle
             .session
             .reset_state(&state)
+            .map_err(FfiError::runtime)?;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_tdmpc2_reset_pixels(
+    handle: *mut SwmTdMpc2,
+    pixels: *const f32,
+    batch: usize,
+    height: usize,
+    width: usize,
+    layout: c_int,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        if handle.state_dim.is_some() && handle.image_size.is_some() {
+            return Err(FfiError::invalid(
+                "TD-MPC2 artifact also requires state; use swm_tdmpc2_reset_state_pixels",
+            ));
+        }
+        let pixels =
+            unsafe { pixel_tensor_from_ffi(handle, pixels, batch, height, width, layout)? };
+        handle
+            .session
+            .reset_pixels(&pixels)
+            .map_err(FfiError::runtime)?;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_tdmpc2_reset_state_pixels(
+    handle: *mut SwmTdMpc2,
+    state: *const f32,
+    pixels: *const f32,
+    batch: usize,
+    state_dim: usize,
+    height: usize,
+    width: usize,
+    layout: c_int,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let state = unsafe { state_tensor_from_ffi(handle, state, batch, state_dim)? };
+        let pixels =
+            unsafe { pixel_tensor_from_ffi(handle, pixels, batch, height, width, layout)? };
+        handle
+            .session
+            .reset_observations(&[("pixels", &pixels), ("state", &state)])
             .map_err(FfiError::runtime)?;
         Ok(())
     })
@@ -380,13 +443,121 @@ fn load_tdmpc2_session(
     Ok(TdMpc2Session::new(model, device.clone(), dtype))
 }
 
-fn tdmpc2_state_dim(config: &TdMpc2Config) -> FfiResult<usize> {
-    if config.encodings.len() != 1 || config.encodings[0].name != "state" {
+unsafe fn state_tensor_from_ffi(
+    handle: &SwmTdMpc2,
+    state: *const f32,
+    batch: usize,
+    state_dim: usize,
+) -> FfiResult<Tensor> {
+    if batch == 0 {
+        return Err(FfiError::invalid("batch must be greater than zero"));
+    }
+    let Some(expected_state_dim) = handle.state_dim else {
         return Err(FfiError::invalid(
-            "C ABI currently supports TD-MPC2 state-only artifacts",
+            "TD-MPC2 artifact does not have a state observation",
+        ));
+    };
+    if state_dim != expected_state_dim {
+        return Err(FfiError::invalid(format!(
+            "state_dim {state_dim} does not match runtime state_dim {expected_state_dim}"
+        )));
+    }
+    let len = batch
+        .checked_mul(state_dim)
+        .ok_or_else(|| FfiError::invalid("state length overflow"))?;
+    let state = unsafe { required_slice(state, len, "state")? };
+    Tensor::from_slice(state, (batch, state_dim), handle.session.device())
+        .map_err(FfiError::runtime)
+}
+
+unsafe fn pixel_tensor_from_ffi(
+    handle: &SwmTdMpc2,
+    pixels: *const f32,
+    batch: usize,
+    height: usize,
+    width: usize,
+    layout: c_int,
+) -> FfiResult<Tensor> {
+    if batch == 0 {
+        return Err(FfiError::invalid("batch must be greater than zero"));
+    }
+    let Some(image_size) = handle.image_size else {
+        return Err(FfiError::invalid(
+            "TD-MPC2 artifact does not have a pixel observation",
+        ));
+    };
+    if height != image_size || width != image_size {
+        return Err(FfiError::invalid(format!(
+            "pixel input must match image_size {image_size}, got {height}x{width}"
+        )));
+    }
+    let len = batch
+        .checked_mul(3)
+        .and_then(|len| len.checked_mul(height))
+        .and_then(|len| len.checked_mul(width))
+        .ok_or_else(|| FfiError::invalid("pixel length overflow"))?;
+    let pixels = unsafe { required_slice(pixels, len, "pixels")? };
+    match parse_pixel_layout(layout)? {
+        SwmPixelLayout::Nchw => Tensor::from_slice(
+            pixels,
+            (batch, 3usize, height, width),
+            handle.session.device(),
+        ),
+        SwmPixelLayout::Nhwc => Tensor::from_slice(
+            pixels,
+            (batch, height, width, 3usize),
+            handle.session.device(),
+        ),
+    }
+    .map_err(FfiError::runtime)
+}
+
+fn parse_pixel_layout(layout: c_int) -> FfiResult<SwmPixelLayout> {
+    match layout {
+        0 => Ok(SwmPixelLayout::Nchw),
+        1 => Ok(SwmPixelLayout::Nhwc),
+        other => Err(FfiError::invalid(format!(
+            "unknown pixel layout {other}; expected 0=NCHW or 1=NHWC"
+        ))),
+    }
+}
+
+fn tdmpc2_observation_dims(config: &TdMpc2Config) -> FfiResult<(Option<usize>, Option<usize>)> {
+    let mut state_dim = None;
+    let mut image_size = None;
+
+    for encoding in &config.encodings {
+        match encoding.name.as_str() {
+            "state" => {
+                if state_dim.replace(encoding.input_dim).is_some() {
+                    return Err(FfiError::invalid(
+                        "TD-MPC2 C ABI does not support duplicate state observations",
+                    ));
+                }
+            }
+            "pixels" => {
+                let size = config.image_size.unwrap_or(encoding.input_dim);
+                if image_size.replace(size).is_some() {
+                    return Err(FfiError::invalid(
+                        "TD-MPC2 C ABI does not support duplicate pixel observations",
+                    ));
+                }
+            }
+            other => {
+                return Err(FfiError::invalid(format!(
+                    "TD-MPC2 C ABI does not support observation '{other}'"
+                )));
+            }
+        }
+    }
+
+    if state_dim.is_none() && image_size.is_none() {
+        return Err(FfiError::invalid(
+            "TD-MPC2 C ABI requires a state or pixel observation",
         ));
     }
-    Ok(config.encodings[0].input_dim)
+
+    Ok((state_dim, image_size))
 }
 
 fn action_bounds_from_schema(
@@ -591,5 +762,41 @@ impl FfiError {
             status: SwmStatus::RuntimeError,
             message: message.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::tdmpc2::EncodingConfig;
+
+    #[test]
+    fn tdmpc2_observation_dims_support_state_pixel_and_mixed() -> FfiResult<()> {
+        assert_eq!(
+            tdmpc2_observation_dims(&TdMpc2Config::state_only(12, 4))?,
+            (Some(12), None)
+        );
+        assert_eq!(
+            tdmpc2_observation_dims(&TdMpc2Config::pixel_only(64, 4, 128))?,
+            (None, Some(64))
+        );
+
+        let mut mixed = TdMpc2Config::pixel_only(64, 4, 128);
+        mixed.encodings.push(EncodingConfig::new("state", 12, 128));
+        assert_eq!(tdmpc2_observation_dims(&mixed)?, (Some(12), Some(64)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn tdmpc2_observation_dims_reject_unknown_observation() {
+        let mut config = TdMpc2Config::state_only(12, 4);
+        config
+            .encodings
+            .push(EncodingConfig::new("proprioceptive", 6, 128));
+
+        let err = tdmpc2_observation_dims(&config).unwrap_err();
+        assert_eq!(err.status, SwmStatus::InvalidArgument);
+        assert!(err.message.contains("proprioceptive"));
     }
 }

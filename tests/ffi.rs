@@ -3,6 +3,7 @@ use std::{ffi::CString, ptr};
 use stable_worldmodel_candle::ffi::{
     SwmIcemPlanConfig, SwmStatus, SwmTdMpc2, swm_last_error_message,
     swm_tdmpc2_clear_icem_warm_start, swm_tdmpc2_free, swm_tdmpc2_load, swm_tdmpc2_plan_icem,
+    swm_tdmpc2_reset_pixels, swm_tdmpc2_reset_state_pixels,
 };
 
 #[test]
@@ -60,6 +61,36 @@ fn ffi_plan_icem_rejects_null_handle() {
 #[test]
 fn ffi_clear_icem_warm_start_rejects_null_handle() {
     let status = unsafe { swm_tdmpc2_clear_icem_warm_start(ptr::null_mut()) };
+
+    assert_eq!(status, SwmStatus::NullPointer);
+    assert!(last_error().contains("handle"));
+}
+
+#[test]
+fn ffi_reset_pixels_rejects_null_handle() {
+    let pixels = [0f32; 3 * 4 * 4];
+    let status = unsafe { swm_tdmpc2_reset_pixels(ptr::null_mut(), pixels.as_ptr(), 1, 4, 4, 0) };
+
+    assert_eq!(status, SwmStatus::NullPointer);
+    assert!(last_error().contains("handle"));
+}
+
+#[test]
+fn ffi_reset_state_pixels_rejects_null_handle() {
+    let state = [0f32; 4];
+    let pixels = [0f32; 3 * 4 * 4];
+    let status = unsafe {
+        swm_tdmpc2_reset_state_pixels(
+            ptr::null_mut(),
+            state.as_ptr(),
+            pixels.as_ptr(),
+            1,
+            4,
+            4,
+            4,
+            0,
+        )
+    };
 
     assert_eq!(status, SwmStatus::NullPointer);
     assert!(last_error().contains("handle"));

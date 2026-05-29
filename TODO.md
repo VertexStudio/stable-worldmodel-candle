@@ -49,7 +49,8 @@ predictable and deployment practical.
 - iCEM exists with device-side elite selection, elite carryover between
   iterations, and a shifted warm-start sequence between `plan` calls.
 - Deployment interfaces are currently the Rust library, CLI tools, and an
-  initial C ABI for TD-MPC2 state/vector CEM/MPPI/iCEM planning.
+  initial C ABI for TD-MPC2 state/vector, pixel, and mixed state+pixel
+  CEM/MPPI/iCEM planning.
 
 ## Phase 1: Baseline Parity And Benchmarks
 
@@ -336,10 +337,11 @@ Expose the stable runtime without forcing a Python service.
 **Status**
 
 - The crate builds both `rlib` and `cdylib`.
-- `ffi` exposes TD-MPC2 state/vector artifact loading, state reset, dimension
-  accessors, CEM planning, MPPI planning, iCEM planning with persistent
-  warm-start state, handle cleanup, and thread-local error reporting.
-- LeWM and pixel TD-MPC2 C ABI entrypoints are still pending.
+- `ffi` exposes TD-MPC2 state/vector, pixel, and mixed state+pixel artifact
+  loading, observation reset, dimension accessors, CEM planning, MPPI planning,
+  iCEM planning with persistent warm-start state, handle cleanup, and
+  thread-local error reporting.
+- LeWM C ABI entrypoints are still pending.
 
 **Done When**
 
