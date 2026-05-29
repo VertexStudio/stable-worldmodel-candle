@@ -1,0 +1,45 @@
+[package]
+name = "stable-worldmodel-rs"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Candle inference port for stable-worldmodel LeWM."
+
+[dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.6.1", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+
+candle = { package = "candle-core", path = "../candle/candle-core" }
+candle-nn = { package = "candle-nn", path = "../candle/candle-nn" }
+candle-transformers = { path = "../candle/candle-transformers" }
+
+accelerate-src = { version = "0.3.2", optional = true }
+intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"], optional = true }
+
+[features]
+default = []
+accelerate = [
+    "dep:accelerate-src",
+    "candle/accelerate",
+    "candle-nn/accelerate",
+    "candle-transformers/accelerate",
+]
+cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+cudnn = ["cuda", "candle/cudnn", "candle-nn/cudnn", "candle-transformers/cudnn"]
+metal = ["candle/metal", "candle-nn/metal", "candle-transformers/metal"]
+mkl = [
+    "dep:intel-mkl-src",
+    "candle/mkl",
+    "candle-nn/mkl",
+    "candle-transformers/mkl",
+]
+
+[lib]
+name = "stable_worldmodel_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lewm-inspect"
+path = "src/bin/lewm-inspect.rs"
