@@ -20,6 +20,8 @@ impl EncodingConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TdMpc2Config {
     pub action_dim: usize,
+    #[serde(default)]
+    pub image_size: Option<usize>,
     pub enc_dim: usize,
     pub mlp_dim: usize,
     pub simnorm_dim: usize,
@@ -36,6 +38,7 @@ impl TdMpc2Config {
     pub fn state_only(state_dim: usize, action_dim: usize) -> Self {
         Self {
             action_dim,
+            image_size: None,
             enc_dim: 256,
             mlp_dim: 384,
             simnorm_dim: 8,
@@ -54,5 +57,22 @@ impl TdMpc2Config {
             .iter()
             .map(|encoding| encoding.output_dim)
             .sum()
+    }
+
+    pub fn pixel_only(image_size: usize, action_dim: usize, pixel_dim: usize) -> Self {
+        Self {
+            action_dim,
+            image_size: Some(image_size),
+            enc_dim: 256,
+            mlp_dim: 384,
+            simnorm_dim: 8,
+            num_q: 5,
+            num_bins: 101,
+            vmin: -6.0,
+            vmax: 2.0,
+            discount: 0.99,
+            uncertainty_penalty: 0.5,
+            encodings: vec![EncodingConfig::new("pixels", image_size, pixel_dim)],
+        }
     }
 }

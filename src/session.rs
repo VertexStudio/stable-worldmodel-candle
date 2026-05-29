@@ -69,7 +69,7 @@ pub struct TdMpc2Session {
     model: TdMpc2,
     device: Device,
     dtype: DType,
-    state: Option<Tensor>,
+    observations: Option<Vec<(String, Tensor)>>,
     z: Option<Tensor>,
 }
 
@@ -79,7 +79,7 @@ impl TdMpc2Session {
             model,
             device,
             dtype,
-            state: None,
+            observations: None,
             z: None,
         }
     }
@@ -97,9 +97,29 @@ impl TdMpc2Session {
     }
 
     pub fn reset_state(&mut self, state: &Tensor) -> Result<Tensor> {
-        let state = state.to_device(&self.device)?.to_dtype(self.dtype)?;
-        let z = self.model.encode_state(&state)?;
-        self.state = Some(state);
+        self.reset_observations(&[("state", state)])
+    }
+
+    pub fn reset_pixels(&mut self, pixels: &Tensor) -> Result<Tensor> {
+        self.reset_observations(&[("pixels", pixels)])
+    }
+
+    pub fn reset_observations(&mut self, observations: &[(&str, &Tensor)]) -> Result<Tensor> {
+        let observations = observations
+            .iter()
+            .map(|(name, tensor)| {
+                Ok((
+                    (*name).to_string(),
+                    tensor.to_device(&self.device)?.to_dtype(self.dtype)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let refs = observations
+            .iter()
+            .map(|(name, tensor)| (name.as_str(), tensor))
+            .collect::<Vec<_>>();
+        let z = self.model.encode(&refs)?;
+        self.observations = Some(observations);
         self.z = Some(z.clone());
         Ok(z)
     }
@@ -116,12 +136,16 @@ impl TdMpc2Session {
     }
 
     pub fn score_candidates(&self, action_candidates: &Tensor) -> Result<Tensor> {
-        let state = self.state.as_ref().ok_or_else(|| {
+        let observations = self.observations.as_ref().ok_or_else(|| {
             candle::Error::Msg("TdMpc2Session must be reset before scoring candidates".to_string())
         })?;
+        let refs = observations
+            .iter()
+            .map(|(name, tensor)| (name.as_str(), tensor))
+            .collect::<Vec<_>>();
         let action_candidates = action_candidates
             .to_device(&self.device)?
             .to_dtype(self.dtype)?;
-        self.model.get_cost_state(state, &action_candidates)
+        self.model.get_cost(&refs, &action_candidates)
     }
 }

@@ -113,6 +113,7 @@ fn tdmpc2_state_only_defaults_match_python_config() {
     let cfg = TdMpc2Config::state_only(12, 4);
 
     assert_eq!(cfg.action_dim, 4);
+    assert_eq!(cfg.image_size, None);
     assert_eq!(cfg.enc_dim, 256);
     assert_eq!(cfg.mlp_dim, 384);
     assert_eq!(cfg.simnorm_dim, 8);
@@ -125,6 +126,18 @@ fn tdmpc2_state_only_defaults_match_python_config() {
     assert_eq!(cfg.latent_dim(), 128);
     assert_eq!(cfg.encodings[0].name, "state");
     assert_eq!(cfg.encodings[0].input_dim, 12);
+    assert_eq!(cfg.encodings[0].output_dim, 128);
+}
+
+#[test]
+fn tdmpc2_pixel_only_config_sets_image_size() {
+    let cfg = TdMpc2Config::pixel_only(64, 4, 128);
+
+    assert_eq!(cfg.action_dim, 4);
+    assert_eq!(cfg.image_size, Some(64));
+    assert_eq!(cfg.latent_dim(), 128);
+    assert_eq!(cfg.encodings[0].name, "pixels");
+    assert_eq!(cfg.encodings[0].input_dim, 64);
     assert_eq!(cfg.encodings[0].output_dim, 128);
 }
 

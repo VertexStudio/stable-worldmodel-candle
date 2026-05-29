@@ -3,12 +3,13 @@ use candle_nn::VarBuilder;
 
 use super::{
     config::TdMpc2Config,
-    modules::{TdMpc2Mlp, VectorEncoder, cat_last, two_hot_inv},
+    modules::{PixelEncoder, TdMpc2Mlp, VectorEncoder, cat_last, two_hot_inv},
 };
 
 #[derive(Debug, Clone)]
 pub struct TdMpc2 {
     cfg: TdMpc2Config,
+    pixel_encoder: Option<PixelEncoder>,
     encoders: Vec<VectorEncoder>,
     dynamics: TdMpc2Mlp,
     reward: TdMpc2Mlp,
@@ -20,13 +21,35 @@ impl TdMpc2 {
     pub fn new(cfg: TdMpc2Config, vb: VarBuilder) -> Result<Self> {
         let latent_dim = cfg.latent_dim();
         if latent_dim == 0 {
-            candle::bail!("TD-MPC2 requires at least one vector encoding")
+            candle::bail!("TD-MPC2 requires at least one observation encoding")
         }
+
+        let pixel_cfg = cfg
+            .encodings
+            .iter()
+            .find(|encoding| encoding.name == "pixels")
+            .cloned();
+        let pixel_encoder = match pixel_cfg {
+            Some(encoding) => {
+                let image_size = cfg.image_size.ok_or_else(|| {
+                    candle::Error::Msg(
+                        "TD-MPC2 pixel encoding requires config.image_size".to_string(),
+                    )
+                })?;
+                Some(PixelEncoder::new(
+                    image_size,
+                    encoding.output_dim,
+                    vb.clone(),
+                )?)
+            }
+            None => None,
+        };
 
         let encoders = cfg
             .encodings
             .iter()
             .cloned()
+            .filter(|encoding| encoding.name != "pixels")
             .map(|encoding| {
                 VectorEncoder::new(
                     encoding.clone(),
@@ -64,6 +87,7 @@ impl TdMpc2 {
 
         Ok(Self {
             cfg,
+            pixel_encoder,
             encoders,
             dynamics,
             reward,
@@ -78,6 +102,13 @@ impl TdMpc2 {
 
     pub fn encode(&self, observations: &[(&str, &Tensor)]) -> Result<Tensor> {
         let mut embeddings = Vec::with_capacity(self.encoders.len());
+        if let Some(pixel_encoder) = &self.pixel_encoder {
+            let (_, xs) = observations
+                .iter()
+                .find(|(name, _)| *name == "pixels")
+                .ok_or_else(|| candle::Error::Msg("missing observation 'pixels'".to_string()))?;
+            embeddings.push(pixel_encoder.forward(xs)?);
+        }
         for encoder in &self.encoders {
             let (_, xs) = observations
                 .iter()
@@ -93,6 +124,10 @@ impl TdMpc2 {
 
     pub fn encode_state(&self, state: &Tensor) -> Result<Tensor> {
         self.encode(&[("state", state)])
+    }
+
+    pub fn encode_pixels(&self, pixels: &Tensor) -> Result<Tensor> {
+        self.encode(&[("pixels", pixels)])
     }
 
     pub fn forward(&self, z: &Tensor, action: &Tensor) -> Result<(Tensor, Tensor)> {

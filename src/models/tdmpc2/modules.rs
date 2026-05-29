@@ -1,5 +1,7 @@
 use candle::{D, Module, Result, Tensor};
-use candle_nn::{Activation, LayerNorm, Linear, VarBuilder, layer_norm, linear};
+use candle_nn::{
+    Activation, Conv2d, Conv2dConfig, LayerNorm, Linear, VarBuilder, conv2d, layer_norm, linear,
+};
 
 use super::config::EncodingConfig;
 
@@ -135,6 +137,110 @@ impl VectorEncoder {
         out_shape.push(self.cfg.output_dim);
         xs.reshape(out_shape)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct PixelEncoder {
+    image_size: usize,
+    output_dim: usize,
+    conv1: Conv2d,
+    conv2: Conv2d,
+    conv3: Conv2d,
+    conv4: Conv2d,
+    proj: Linear,
+}
+
+impl PixelEncoder {
+    pub fn new(image_size: usize, output_dim: usize, vb: VarBuilder) -> Result<Self> {
+        let stride2 = Conv2dConfig {
+            stride: 2,
+            ..Default::default()
+        };
+        let stride1 = Conv2dConfig {
+            stride: 1,
+            ..Default::default()
+        };
+        let conv1 = conv2d(3, 32, 7, stride2, vb.pp("cnn").pp("0"))?;
+        let conv2 = conv2d(32, 32, 5, stride2, vb.pp("cnn").pp("2"))?;
+        let conv3 = conv2d(32, 32, 3, stride2, vb.pp("cnn").pp("4"))?;
+        let conv4 = conv2d(32, 32, 3, stride1, vb.pp("cnn").pp("6"))?;
+        let cnn_out_dim = cnn_out_dim(image_size)?;
+        let proj = linear(cnn_out_dim, output_dim, vb.pp("pixel_encoder"))?;
+        Ok(Self {
+            image_size,
+            output_dim,
+            conv1,
+            conv2,
+            conv3,
+            conv4,
+            proj,
+        })
+    }
+
+    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let xs = pixels_to_nchw(xs, self.image_size)?;
+        let dims = xs.dims();
+        let leading = &dims[..dims.len() - 3];
+        let batch = leading.iter().product::<usize>();
+        let xs = xs.reshape((batch, 3, self.image_size, self.image_size))?;
+        let xs = Activation::Mish.forward(&self.conv1.forward(&xs)?)?;
+        let xs = Activation::Mish.forward(&self.conv2.forward(&xs)?)?;
+        let xs = Activation::Mish.forward(&self.conv3.forward(&xs)?)?;
+        let xs = Activation::Mish.forward(&self.conv4.forward(&xs)?)?;
+        let xs = self.proj.forward(&xs.flatten_from(1)?)?;
+
+        let mut out_shape = leading.to_vec();
+        out_shape.push(self.output_dim);
+        xs.reshape(out_shape)
+    }
+}
+
+fn pixels_to_nchw(xs: &Tensor, image_size: usize) -> Result<Tensor> {
+    let dims = xs.dims();
+    if dims.len() < 3 {
+        candle::bail!(
+            "pixel encoder expects at least 3 dims, got {:?}",
+            xs.shape()
+        );
+    }
+    let rank = dims.len();
+    if dims[rank - 1] == 3 {
+        if dims[rank - 3] != image_size || dims[rank - 2] != image_size {
+            candle::bail!(
+                "pixel encoder expects NHWC spatial size {image_size}x{image_size}, got {:?}",
+                xs.shape()
+            );
+        }
+        let mut order = (0..rank - 3).collect::<Vec<_>>();
+        order.push(rank - 1);
+        order.push(rank - 3);
+        order.push(rank - 2);
+        return xs.permute(order)?.contiguous();
+    }
+
+    if dims[rank - 3] != 3 || dims[rank - 2] != image_size || dims[rank - 1] != image_size {
+        candle::bail!(
+            "pixel encoder expects NCHW or NHWC with 3 channels and spatial size {image_size}x{image_size}, got {:?}",
+            xs.shape()
+        );
+    }
+    Ok(xs.clone())
+}
+
+fn cnn_out_dim(image_size: usize) -> Result<usize> {
+    let mut size = image_size;
+    size = conv_out_size(size, 7, 2)?;
+    size = conv_out_size(size, 5, 2)?;
+    size = conv_out_size(size, 3, 2)?;
+    size = conv_out_size(size, 3, 1)?;
+    Ok(32 * size * size)
+}
+
+fn conv_out_size(size: usize, kernel: usize, stride: usize) -> Result<usize> {
+    if size < kernel {
+        candle::bail!("image size {size} is too small for TD-MPC2 pixel CNN kernel {kernel}");
+    }
+    Ok((size - kernel) / stride + 1)
 }
 
 #[derive(Debug, Clone)]

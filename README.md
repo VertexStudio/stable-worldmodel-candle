@@ -11,7 +11,7 @@ helpers live at the crate root, and CLIs select a backend explicitly.
 
 - Top-level modules: `checkpoint`, `config`, and `models`.
 - `models::lewm`: ViT-Tiny encoder, projector, action encoder, conditional predictor, latent rollout, and goal MSE cost.
-- `models::tdmpc2`: state/vector observation encoder, latent dynamics, reward/Q heads, actor mean action, and candidate cost scoring.
+- `models::tdmpc2`: state/vector and pixel observation encoders, latent dynamics, reward/Q heads, actor mean action, and candidate cost scoring.
 - Loading from PyTorch `.pt` state dicts via `VarBuilder::from_pth`, or from `.safetensors`.
 - Optional Hugging Face Hub checkpoint download support behind `--features hub`.
 - Rust 2024 edition with published Candle crates.
@@ -123,6 +123,9 @@ state/action arrays without adding image or video decoding dependencies. RGB
 frames can be resized, normalized, stacked as `[batch, time, channels, height,
 width]`, and moved to the selected Candle device. Optional file/video decoding
 can be layered on top of this later without changing the core tensor path.
+TD-MPC2 pixel inputs use the upstream CNN layout (`cnn.0`, `cnn.2`, `cnn.4`,
+`cnn.6`, then `pixel_encoder`) and accept either NCHW or NHWC tensors before
+SimNorm.
 
 For backend parity, generate CPU and CUDA Python fixtures from identical CPU
 input tensors, then compare them before comparing Candle:
@@ -259,8 +262,9 @@ rollout or scoring, and an end-to-end synthetic path.
 The library exposes initial family-specific session wrappers for repeated
 control-loop use. `LeWmSession` caches encoded image history after
 `reset_pixels`, and `TdMpc2Session` caches state and latent tensors after
-`reset_state`. Both sessions keep device and dtype selection explicit and expose
-candidate scoring methods that reuse the cached current context.
+`reset_state`, `reset_pixels`, or `reset_observations`. Both sessions keep
+device and dtype selection explicit and expose candidate scoring methods that
+reuse the cached current context.
 
 ## Planning Solvers
 
@@ -375,7 +379,7 @@ checkpoint plus config.
 ## Remaining Work
 
 - Add compact fixture integration tests once small public test weights are available.
-- Add TD-MPC2 pixel CNN support and policy rollout sampling.
+- Add TD-MPC2 pixel fixture parity and policy rollout sampling.
 - Remove CEM/iCEM host elite ranking once Candle has a practical device-native top-k/sort path.
 - Add optional safetensors export guidance for deployments that prefer mmap loading.
 - Expand the C ABI to LeWM, pixel TD-MPC2, and iCEM once those deployment paths stabilize.
