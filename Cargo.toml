@@ -43,3 +43,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "lewm-inspect"
 path = "src/bin/lewm-inspect.rs"
+
+[[bin]]
+name = "tdmpc2-inspect"
+path = "src/bin/tdmpc2-inspect.rs"
