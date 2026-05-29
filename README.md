@@ -262,6 +262,31 @@ control-loop use. `LeWmSession` caches encoded image history after
 `reset_state`. Both sessions keep device and dtype selection explicit and expose
 candidate scoring methods that reuse the cached current context.
 
+## Planning Solvers
+
+`planner::CemPlanner` provides the first Rust-native MPC solver surface. It
+generates action candidates shaped `[batch, samples, horizon, action_dim]`,
+scores them through a `CandidateScorer`, updates the CEM distribution from the
+elite set, and returns the first action plus the selected sequence:
+
+```rust
+use stable_worldmodel_candle::planner::{CemConfig, CemPlanner};
+
+let planner = CemPlanner::new(CemConfig::new(5, 512, 64, action_dim));
+let result = planner.plan(&tdmpc2_session)?;
+let action = result.first_action;
+```
+
+`TdMpc2Session` implements `CandidateScorer` directly. For LeWM, wrap a reset
+session and goal embedding with `planner::LeWmGoalScorer`.
+
+The current CEM implementation keeps candidate tensors, model rollout, and
+scoring on the selected Candle device. Elite ranking is intentionally marked in
+`PlanResult::used_host_elite_selection`: Candle 0.10 does not expose a general
+top-k/sort primitive, so scores are copied to the host for ranking and elite
+indices are moved back to the device for `index_select`. MPPI/iCEM and a
+device-native elite-selection path remain planned solver work.
+
 ## Source Layout
 
 ```text
@@ -272,6 +297,7 @@ src/
 │   ├── mod.rs
 │   └── lewm/            # LeWM backend
 │   └── tdmpc2/          # state/vector TD-MPC2 backend
+├── planner.rs           # Rust planning solvers
 └── bin/
     └── lewm-inspect.rs  # LeWM smoke-test CLI
     └── tdmpc2-inspect.rs
@@ -308,9 +334,8 @@ checkpoint plus config.
 
 ## Remaining Work
 
-- Promote the fixture comparison into a CI-friendly integration test once small test weights are available.
-- Add image preprocessing utilities matching `stable_pretraining.data.transforms.ToImage` plus ImageNet normalization and resize.
+- Add compact fixture integration tests once small public test weights are available.
 - Add TD-MPC2 pixel CNN support and policy rollout sampling.
-- Port CEM/iCEM/MPPI planner loops in Rust, keeping candidate evaluation on the selected Candle device.
+- Add MPPI/iCEM planner loops and remove CEM host elite ranking once Candle has a practical device-native top-k/sort path.
 - Add optional safetensors export guidance for deployments that prefer mmap loading.
 - Add additional sibling model backends starting from the simplest production inference path for each model.

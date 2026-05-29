@@ -6,6 +6,7 @@ pub mod config;
 #[cfg(feature = "hub")]
 pub mod hub;
 pub mod models;
+pub mod planner;
 pub mod preprocess;
 pub mod runtime;
 pub mod session;

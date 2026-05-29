@@ -32,13 +32,18 @@ predictable and deployment practical.
 
 - LeWM image-model implementation exists.
 - LeWM Python/Candle CPU/CUDA parity exists through `tools/cuda_parity.sh`.
-- TD-MPC2 state/vector inference exists.
-- TD-MPC2 fixture parity is not complete.
-- Rust preprocessing for raw image/video/state inputs is not complete.
-- There is no benchmark harness for p50/p95/p99 runtime measurements.
-- There is no runtime session API.
-- There are no Rust-native planning solvers.
-- Deployment interfaces are currently the Rust library plus CLI tools.
+- TD-MPC2 state/vector inference and CPU/CUDA fixture parity exist.
+- Rust preprocessing exists for decoded RGB frames, state arrays, and action
+  arrays; optional file/video decode support is still pending.
+- `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
+  and TD-MPC2 paths.
+- Family-specific runtime session APIs exist for LeWM and TD-MPC2.
+- CEM exists as the first Rust-native planning solver. It keeps candidate
+  generation, rollout/scoring, and elite gathering in Candle tensors, but it
+  currently ranks scores on the host because Candle 0.10 has no general
+  top-k/sort primitive.
+- Deployment interfaces are currently the Rust library plus CLI tools. A C ABI
+  is still pending.
 
 ## Phase 1: Baseline Parity And Benchmarks
 
@@ -224,6 +229,16 @@ overhead.
   best-action selection on the selected Candle device.
 - Avoid Python loops, host/device round trips, and repeated allocation wherever
   Candle allows.
+
+**Status**
+
+- CEM is implemented through `planner::CemPlanner`.
+- `TdMpc2Session` implements the planner scorer interface directly.
+- `LeWmGoalScorer` adapts `LeWmSession` plus a goal embedding to the same
+  scorer interface.
+- Host score ranking is currently explicit in
+  `PlanResult::used_host_elite_selection`; replacing it with device-native
+  top-k/sort remains part of this phase.
 
 **Done When**
 
