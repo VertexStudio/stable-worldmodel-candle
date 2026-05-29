@@ -1,7 +1,8 @@
 use std::{ffi::CString, ptr};
 
 use stable_worldmodel_candle::ffi::{
-    SwmStatus, SwmTdMpc2, swm_last_error_message, swm_tdmpc2_free, swm_tdmpc2_load,
+    SwmIcemPlanConfig, SwmStatus, SwmTdMpc2, swm_last_error_message,
+    swm_tdmpc2_clear_icem_warm_start, swm_tdmpc2_free, swm_tdmpc2_load, swm_tdmpc2_plan_icem,
 };
 
 #[test]
@@ -37,6 +38,31 @@ fn ffi_free_accepts_null() {
     unsafe {
         swm_tdmpc2_free(ptr::null_mut());
     }
+}
+
+#[test]
+fn ffi_plan_icem_rejects_null_handle() {
+    let mut action = [0f32; 4];
+    let status = unsafe {
+        swm_tdmpc2_plan_icem(
+            ptr::null_mut(),
+            SwmIcemPlanConfig::default(),
+            action.as_mut_ptr(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    };
+
+    assert_eq!(status, SwmStatus::NullPointer);
+    assert!(last_error().contains("handle"));
+}
+
+#[test]
+fn ffi_clear_icem_warm_start_rejects_null_handle() {
+    let status = unsafe { swm_tdmpc2_clear_icem_warm_start(ptr::null_mut()) };
+
+    assert_eq!(status, SwmStatus::NullPointer);
+    assert!(last_error().contains("handle"));
 }
 
 fn last_error() -> String {

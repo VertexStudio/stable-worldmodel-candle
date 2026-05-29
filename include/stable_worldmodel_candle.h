@@ -34,6 +34,16 @@ typedef struct SwmMppiPlanConfig {
   float temperature;
 } SwmMppiPlanConfig;
 
+typedef struct SwmIcemPlanConfig {
+  size_t horizon;
+  size_t samples;
+  size_t elites;
+  size_t keep_elites;
+  size_t iterations;
+  float init_std;
+  float min_std;
+} SwmIcemPlanConfig;
+
 const char *swm_last_error_message(void);
 
 SwmStatus swm_tdmpc2_load(const char *artifact_dir,
@@ -63,6 +73,14 @@ SwmStatus swm_tdmpc2_plan_mppi(SwmTdMpc2 *handle,
                                float *action_out,
                                float *sequence_out,
                                float *best_cost_out);
+
+SwmStatus swm_tdmpc2_plan_icem(SwmTdMpc2 *handle,
+                               SwmIcemPlanConfig config,
+                               float *action_out,
+                               float *sequence_out,
+                               float *best_cost_out);
+
+SwmStatus swm_tdmpc2_clear_icem_warm_start(SwmTdMpc2 *handle);
 
 #ifdef __cplusplus
 }

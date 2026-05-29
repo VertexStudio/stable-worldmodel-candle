@@ -106,7 +106,7 @@ impl ActionBounds {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CemConfig {
     pub horizon: usize,
     pub samples: usize,
@@ -167,7 +167,7 @@ impl CemConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MppiConfig {
     pub horizon: usize,
     pub samples: usize,
@@ -216,7 +216,7 @@ impl MppiConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IcemConfig {
     pub horizon: usize,
     pub samples: usize,

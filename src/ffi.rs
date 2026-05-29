@@ -12,7 +12,9 @@ use crate::{
     checkpoint,
     config::ModelConfig,
     models::tdmpc2::{TdMpc2, TdMpc2Config},
-    planner::{ActionBounds, CemConfig, CemPlanner, MppiConfig, MppiPlanner},
+    planner::{
+        ActionBounds, CemConfig, CemPlanner, IcemConfig, IcemPlanner, MppiConfig, MppiPlanner,
+    },
     runtime::{DTypeSpec, DeviceSpec},
     session::TdMpc2Session,
 };
@@ -79,11 +81,38 @@ impl Default for SwmMppiPlanConfig {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SwmIcemPlanConfig {
+    pub horizon: usize,
+    pub samples: usize,
+    pub elites: usize,
+    pub keep_elites: usize,
+    pub iterations: usize,
+    pub init_std: f32,
+    pub min_std: f32,
+}
+
+impl Default for SwmIcemPlanConfig {
+    fn default() -> Self {
+        Self {
+            horizon: 5,
+            samples: 512,
+            elites: 64,
+            keep_elites: 64,
+            iterations: 4,
+            init_std: 1.0,
+            min_std: 1e-3,
+        }
+    }
+}
+
 pub struct SwmTdMpc2 {
     session: TdMpc2Session,
     state_dim: usize,
     action_dim: usize,
     action_bounds: ActionBounds,
+    icem_planner: Option<IcemPlanner>,
 }
 
 #[unsafe(no_mangle)]
@@ -136,6 +165,7 @@ pub unsafe extern "C" fn swm_tdmpc2_load(
             state_dim,
             action_dim,
             action_bounds,
+            icem_planner: None,
         });
         *out = Box::into_raw(handle);
         Ok(())
@@ -274,6 +304,68 @@ pub unsafe extern "C" fn swm_tdmpc2_plan_mppi(
             best_cost_out,
         )
     })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_tdmpc2_plan_icem(
+    handle: *mut SwmTdMpc2,
+    ffi_config: SwmIcemPlanConfig,
+    action_out: *mut f32,
+    sequence_out: *mut f32,
+    best_cost_out: *mut f32,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let config = icem_config_from_ffi(ffi_config, handle.action_dim, &handle.action_bounds);
+        let planner = match handle.icem_planner.as_mut() {
+            Some(planner) if planner.config() == &config => planner,
+            _ => {
+                handle.icem_planner = Some(IcemPlanner::new(config));
+                handle.icem_planner.as_mut().expect("iCEM planner set")
+            }
+        };
+
+        let result = planner.plan(&handle.session).map_err(FfiError::runtime)?;
+        copy_plan_outputs(
+            &result.first_action,
+            &result.sequence,
+            &result.scores,
+            &result.best_indices,
+            action_out,
+            sequence_out,
+            best_cost_out,
+        )
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_tdmpc2_clear_icem_warm_start(handle: *mut SwmTdMpc2) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        if let Some(planner) = handle.icem_planner.as_mut() {
+            planner.clear_warm_start();
+        }
+        Ok(())
+    })
+}
+
+fn icem_config_from_ffi(
+    ffi_config: SwmIcemPlanConfig,
+    action_dim: usize,
+    action_bounds: &ActionBounds,
+) -> IcemConfig {
+    let mut config = IcemConfig::new(
+        ffi_config.horizon,
+        ffi_config.samples,
+        ffi_config.elites,
+        action_dim,
+    );
+    config.keep_elites = ffi_config.keep_elites;
+    config.iterations = ffi_config.iterations;
+    config.init_std = ffi_config.init_std;
+    config.min_std = ffi_config.min_std;
+    config.action_bounds = action_bounds.clone();
+    config
 }
 
 fn load_tdmpc2_session(
