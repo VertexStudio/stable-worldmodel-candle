@@ -8,3 +8,4 @@ pub mod hub;
 pub mod models;
 pub mod preprocess;
 pub mod runtime;
+pub mod session;

@@ -254,6 +254,14 @@ CUDA and Metal timings include queued device work rather than just launch
 overhead. Current sections cover synthetic encode, dynamics where applicable,
 rollout or scoring, and an end-to-end synthetic path.
 
+## Runtime Sessions
+
+The library exposes initial family-specific session wrappers for repeated
+control-loop use. `LeWmSession` caches encoded image history after
+`reset_pixels`, and `TdMpc2Session` caches state and latent tensors after
+`reset_state`. Both sessions keep device and dtype selection explicit and expose
+candidate scoring methods that reuse the cached current context.
+
 ## Source Layout
 
 ```text
