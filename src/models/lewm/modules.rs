@@ -4,7 +4,7 @@ use candle_nn::{
     batch_norm, conv1d, linear, linear_no_bias,
 };
 
-use crate::config::{ActionEmbedderConfig, MlpConfig, NormKind, PredictorConfig};
+use super::config::{ActionEmbedderConfig, MlpConfig, NormKind, PredictorConfig};
 
 fn layer_norm_no_affine(xs: &Tensor, eps: f64) -> Result<Tensor> {
     let dtype = xs.dtype();

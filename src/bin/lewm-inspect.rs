@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use candle::{DType, Device, IndexOp, Tensor};
 use candle_nn::{VarBuilder, VarMap};
 use clap::{Parser, ValueEnum};
-use stable_worldmodel_rs::{LeWm, LeWmConfig};
+use stable_worldmodel_rs::models::lewm::{LeWm, LeWmConfig};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum DeviceArg {

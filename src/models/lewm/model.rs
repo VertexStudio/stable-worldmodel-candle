@@ -1,7 +1,7 @@
 use candle::{D, IndexOp, Module, Result, Tensor};
 use candle_nn::VarBuilder;
 
-use crate::{
+use super::{
     config::LeWmConfig,
     modules::{ActionEmbedder, Mlp, Predictor},
     vit::HfVitEncoder,

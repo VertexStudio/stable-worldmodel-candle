@@ -1,4 +1,4 @@
-use stable_worldmodel_rs::{LeWmConfig, NormKind};
+use stable_worldmodel_rs::models::lewm::{LeWmConfig, NormKind};
 
 #[test]
 fn tiny_patch14_defaults_match_python_config() {

@@ -2,7 +2,7 @@ use candle::{IndexOp, Module, Result, Tensor};
 use candle_nn::{LayerNorm, VarBuilder, layer_norm};
 use candle_transformers::models::vit;
 
-use crate::config::VitEncoderConfig;
+use super::config::VitEncoderConfig;
 
 impl From<&VitEncoderConfig> for vit::Config {
     fn from(cfg: &VitEncoderConfig) -> Self {
