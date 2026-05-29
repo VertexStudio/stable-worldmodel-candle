@@ -1,8 +1,13 @@
 # stable-worldmodel-rs
 
-Rust/Candle inference port for the `stable-worldmodel` LeWM path.
+Rust/Candle inference runtime for `stable-worldmodel`.
 
-This crate follows the production-facing subset of the Python model:
+The crate is structured like Candle model support: model families are peers under
+`src/models/`, examples and CLIs opt into a specific architecture, and the
+top-level API stays neutral.
+
+LeWM is the first implemented backend because its inference graph is compact and
+maps directly to Candle primitives:
 
 ```text
 pixels -> Hugging Face ViTModel encoder -> projector
@@ -12,11 +17,13 @@ embeddings + action embeddings -> AdaLN predictor -> rollout/cost
 
 ## Current Scope
 
-- ViT-Tiny encoder matching `stable_pretraining.backbone.utils.vit_hf(size="tiny", patch_size=14, image_size=224, pretrained=false, use_mask_token=false)`.
+- Neutral top-level modules: `checkpoint`, `config`, and `models`.
+- First model backend: `models::lewm`.
+- LeWM ViT-Tiny encoder matching `stable_pretraining.backbone.utils.vit_hf(size="tiny", patch_size=14, image_size=224, pretrained=false, use_mask_token=false)`.
 - LeWM projector, action encoder, conditional predictor, latent rollout, and goal MSE cost.
 - Loading from PyTorch `.pt` state dicts via `VarBuilder::from_pth`, or from `.safetensors`.
 - Rust 2024 edition with local Candle path dependencies from `../candle`.
-- A shape smoke-test CLI:
+- A LeWM-specific shape smoke-test CLI:
 
 ```bash
 cargo run --bin lewm-inspect -- --action-dim 2
@@ -64,6 +71,23 @@ cuDNN is available as an additive feature:
 cargo check --features cudnn --all-targets
 ```
 
+## Source Layout
+
+```text
+src/
+├── checkpoint.rs        # neutral weight-loading helpers
+├── config.rs            # top-level model selection config
+├── models/
+│   ├── mod.rs
+│   └── lewm/            # first supported model backend
+└── bin/
+    └── lewm-inspect.rs  # LeWM smoke-test CLI
+```
+
+Future stable-worldmodel backends should be added as sibling modules, for example
+`models::tdmpc2`, `models::pldm`, or `models::prejepa`, rather than expanding
+LeWM-specific APIs at the crate root.
+
 ## Alignment Notes
 
 The Python repo saves checkpoints as:
@@ -83,7 +107,7 @@ The Rust model intentionally uses the same module names where possible:
 - `predictor.transformer.layers.*`
 - `pred_proj.net.*`
 
-That means raw `model.state_dict()` checkpoints should be loadable without renaming, assuming the same LeWM config and action dimension.
+That means raw LeWM `model.state_dict()` checkpoints should be loadable without renaming, assuming the same LeWM config and action dimension.
 
 ## Remaining Work
 
@@ -92,3 +116,4 @@ That means raw `model.state_dict()` checkpoints should be loadable without renam
 - Add image preprocessing utilities matching `stable_pretraining.data.transforms.ToImage` plus ImageNet normalization and resize.
 - Port CEM/iCEM planner loops in Rust, keeping candidate evaluation on the selected Candle device.
 - Add optional safetensors export guidance for deployments that prefer mmap loading.
+- Add sibling model backends after LeWM, starting from the simplest production inference path for each model.
