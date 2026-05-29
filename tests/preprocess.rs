@@ -1,6 +1,7 @@
 use candle::{DType, Device};
 use stable_worldmodel_candle::preprocess::{
-    ImagePreprocess, RgbFrameShape, preprocess_actions, preprocess_rgb_frames_u8,
+    ImagePreprocess, RgbFrameShape, preprocess_actions, preprocess_latest_rgb_frame_u8,
+    preprocess_rgb_frames_u8, preprocess_states,
 };
 
 #[test]
@@ -61,6 +62,69 @@ fn resizes_rgb_frames_with_nearest_neighbor() {
     assert!((values[0] - (10.0 / 255.0)).abs() < 1e-6);
     assert!((values[1] - (20.0 / 255.0)).abs() < 1e-6);
     assert!((values[2] - (30.0 / 255.0)).abs() < 1e-6);
+}
+
+#[test]
+fn extracts_latest_rgb_frame_for_pixel_models() {
+    let frames = [1u8, 2, 3, 10, 20, 30];
+    let cfg = ImagePreprocess {
+        image_size: 1,
+        mean: [0.0, 0.0, 0.0],
+        std: [1.0, 1.0, 1.0],
+    };
+    let tensor = preprocess_latest_rgb_frame_u8(
+        &frames,
+        RgbFrameShape {
+            batch: 1,
+            time: 2,
+            height: 1,
+            width: 1,
+        },
+        cfg,
+        DType::F32,
+        &Device::Cpu,
+    )
+    .unwrap();
+
+    assert_eq!(tensor.shape().dims(), &[1, 3, 1, 1]);
+    let values = tensor.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    assert_eq!(values, vec![10.0 / 255.0, 20.0 / 255.0, 30.0 / 255.0]);
+}
+
+#[test]
+fn preprocesses_states_with_optional_normalization() {
+    let tensor = preprocess_states(
+        &[2.0, 4.0, 8.0, 16.0],
+        2,
+        2,
+        Some(&[1.0, 2.0]),
+        Some(&[1.0, 2.0]),
+        DType::F32,
+        &Device::Cpu,
+    )
+    .unwrap();
+
+    assert_eq!(tensor.shape().dims(), &[2, 2]);
+    assert_eq!(
+        tensor.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+        vec![1.0, 1.0, 7.0, 7.0]
+    );
+}
+
+#[test]
+fn rejects_state_normalization_with_wrong_dim() {
+    let err = preprocess_states(
+        &[1.0, 2.0],
+        1,
+        2,
+        Some(&[0.0]),
+        None,
+        DType::F32,
+        &Device::Cpu,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("state mean length"));
 }
 
 #[test]

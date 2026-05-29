@@ -35,8 +35,9 @@ predictable and deployment practical.
 - TD-MPC2 state/vector inference and CPU/CUDA fixture parity exist.
 - TD-MPC2 pixel CNN inference exists for NCHW/NHWC image tensors with CPU/CUDA
   fixture parity for pixel-only and CPU fixture parity for mixed pixel+state.
-- Rust preprocessing exists for decoded RGB frames, state arrays, and action
-  arrays; optional file/video decode support is still pending.
+- Rust preprocessing exists for decoded RGB frame stacks, latest-frame pixel
+  tensors, normalized state arrays, and clamped action arrays; optional
+  file/video decode support is still pending.
 - `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
   and TD-MPC2 paths, including TD-MPC2 CEM/MPPI/iCEM planning latency.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.

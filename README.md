@@ -145,8 +145,11 @@ normalization, and action bounds.
 Core preprocessing currently supports already-decoded RGB frame buffers and
 state/action arrays without adding image or video decoding dependencies. RGB
 frames can be resized, normalized, stacked as `[batch, time, channels, height,
-width]`, and moved to the selected Candle device. Optional file/video decoding
-can be layered on top of this later without changing the core tensor path.
+width]`, converted to the latest `[batch, channels, height, width]` frame for
+pixel models, and moved to the selected Candle device. State vectors can be
+optionally mean/std normalized, and actions can be clamped to configured
+bounds. Optional file/video decoding can be layered on top of this later
+without changing the core tensor path.
 TD-MPC2 pixel inputs use the upstream CNN layout (`cnn.0`, `cnn.2`, `cnn.4`,
 `cnn.6`, then `pixel_encoder`) and accept either NCHW or NHWC tensors before
 SimNorm.

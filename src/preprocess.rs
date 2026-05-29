@@ -1,4 +1,4 @@
-use candle::{DType, Device, Result, Tensor};
+use candle::{DType, Device, IndexOp, Result, Tensor};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RgbFrameShape {
@@ -95,6 +95,73 @@ pub fn preprocess_rgb_frames_u8(
         device,
     )?
     .to_dtype(dtype)
+}
+
+pub fn preprocess_latest_rgb_frame_u8(
+    frames: &[u8],
+    shape: RgbFrameShape,
+    config: ImagePreprocess,
+    dtype: DType,
+    device: &Device,
+) -> Result<Tensor> {
+    let time = shape.time;
+    let frames = preprocess_rgb_frames_u8(frames, shape, config, dtype, device)?;
+    frames.i((.., time - 1, .., .., ..))
+}
+
+pub fn preprocess_states(
+    states: &[f32],
+    batch: usize,
+    state_dim: usize,
+    mean: Option<&[f32]>,
+    std: Option<&[f32]>,
+    dtype: DType,
+    device: &Device,
+) -> Result<Tensor> {
+    if batch == 0 || state_dim == 0 {
+        candle::bail!("state shape dimensions must all be greater than zero");
+    }
+    if states.len() != batch * state_dim {
+        candle::bail!(
+            "state buffer has {} values, expected {}",
+            states.len(),
+            batch * state_dim
+        );
+    }
+    if let Some(mean) = mean {
+        if mean.len() != state_dim {
+            candle::bail!(
+                "state mean length {} does not match state_dim {state_dim}",
+                mean.len()
+            );
+        }
+    }
+    if let Some(std) = std {
+        if std.len() != state_dim {
+            candle::bail!(
+                "state std length {} does not match state_dim {state_dim}",
+                std.len()
+            );
+        }
+        if std.iter().any(|value| *value == 0.0) {
+            candle::bail!("state std values must be non-zero");
+        }
+    }
+
+    let mut output = Vec::with_capacity(states.len());
+    for chunk in states.chunks_exact(state_dim) {
+        for (idx, value) in chunk.iter().enumerate() {
+            let value = match (mean, std) {
+                (Some(mean), Some(std)) => (*value - mean[idx]) / std[idx],
+                (Some(mean), None) => *value - mean[idx],
+                (None, Some(std)) => *value / std[idx],
+                (None, None) => *value,
+            };
+            output.push(value);
+        }
+    }
+
+    Tensor::from_vec(output, (batch, state_dim), device)?.to_dtype(dtype)
 }
 
 pub fn preprocess_actions(
