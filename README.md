@@ -1,17 +1,13 @@
 # stable-worldmodel-candle
 
-Rust/Candle inference runtime for `stable-worldmodel`.
+Rust/Candle inference runtime for `stable-worldmodel` checkpoints.
 
-The crate is structured like Candle model support: model families are peers under
-`src/models/`, examples and CLIs opt into a specific architecture, and the
-top-level API stays neutral.
-
-Supported backends are implemented as sibling modules behind a neutral top-level
-API.
+Model implementations live under `src/models/`. Shared checkpoint and config
+helpers live at the crate root, and CLIs select a backend explicitly.
 
 ## Current Scope
 
-- Neutral top-level modules: `checkpoint`, `config`, and `models`.
+- Top-level modules: `checkpoint`, `config`, and `models`.
 - `models::lewm`: ViT-Tiny encoder, projector, action encoder, conditional predictor, latent rollout, and goal MSE cost.
 - `models::tdmpc2`: state/vector observation encoder, latent dynamics, reward/Q heads, actor mean action, and candidate cost scoring.
 - Loading from PyTorch `.pt` state dicts via `VarBuilder::from_pth`, or from `.safetensors`.
@@ -124,7 +120,7 @@ cargo check --features cudnn --all-targets
 
 ```text
 src/
-├── checkpoint.rs        # neutral weight-loading helpers
+├── checkpoint.rs        # weight-loading helpers
 ├── config.rs            # top-level model selection config
 ├── models/
 │   ├── mod.rs
@@ -135,9 +131,9 @@ src/
     └── tdmpc2-inspect.rs
 ```
 
-Future stable-worldmodel backends should be added as sibling modules, for example
-`models::pldm` or `models::prejepa`, rather than expanding model-specific APIs at
-the crate root.
+Future stable-worldmodel backends can be added as sibling modules, for example
+`models::pldm` or `models::prejepa`. Crate-root APIs should stay focused on
+shared loading and configuration utilities.
 
 ## Alignment Notes
 
