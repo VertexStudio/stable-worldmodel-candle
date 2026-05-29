@@ -1,6 +1,7 @@
 use stable_worldmodel_rs::{
     config::{ModelConfig, ModelKind},
     models::lewm::{LeWmConfig, NormKind},
+    models::tdmpc2::TdMpc2Config,
 };
 
 #[test]
@@ -43,4 +44,34 @@ fn top_level_model_config_is_not_lewm_specific() {
 
     let json = serde_json::to_string(&cfg).unwrap();
     assert!(json.contains("\"model_type\":\"le_wm\""));
+}
+
+#[test]
+fn tdmpc2_state_only_defaults_match_python_config() {
+    let cfg = TdMpc2Config::state_only(12, 4);
+
+    assert_eq!(cfg.action_dim, 4);
+    assert_eq!(cfg.enc_dim, 256);
+    assert_eq!(cfg.mlp_dim, 384);
+    assert_eq!(cfg.simnorm_dim, 8);
+    assert_eq!(cfg.num_q, 5);
+    assert_eq!(cfg.num_bins, 101);
+    assert_eq!(cfg.vmin, -6.0);
+    assert_eq!(cfg.vmax, 2.0);
+    assert_eq!(cfg.discount, 0.99);
+    assert_eq!(cfg.uncertainty_penalty, 0.5);
+    assert_eq!(cfg.latent_dim(), 128);
+    assert_eq!(cfg.encodings[0].name, "state");
+    assert_eq!(cfg.encodings[0].input_dim, 12);
+    assert_eq!(cfg.encodings[0].output_dim, 128);
+}
+
+#[test]
+fn top_level_config_can_select_tdmpc2() {
+    let cfg = ModelConfig::tdmpc2_state_only(12, 4);
+
+    assert_eq!(cfg.kind(), ModelKind::TdMpc2);
+
+    let json = serde_json::to_string(&cfg).unwrap();
+    assert!(json.contains("\"model_type\":\"tdmpc2\""));
 }
