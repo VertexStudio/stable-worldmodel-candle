@@ -56,13 +56,14 @@ Official LeWM mirrors currently use this layout, for example
 To export a deterministic Python fixture from the original implementation:
 
 ```bash
-cd /Users/rozgo/vertex/stable-worldmodel
+# From a checkout where stable-worldmodel and stable-worldmodel-rs are siblings.
+cd stable-worldmodel
 uv run --python 3.12 --no-dev --extra train \
   --with imageio --with 'transformers<5' \
-  python /Users/rozgo/vertex/stable-worldmodel-rs/tools/export_lewm_fixture.py \
-  --stable-worldmodel-root /Users/rozgo/vertex/stable-worldmodel \
+  python ../stable-worldmodel-rs/tools/export_lewm_fixture.py \
+  --stable-worldmodel-root . \
   --model quentinll/lewm-pusht \
-  --output /Users/rozgo/vertex/stable-worldmodel-rs/target/lewm-pusht-fixture.npz
+  --output ../stable-worldmodel-rs/target/lewm-pusht-fixture.npz
 ```
 
 The `transformers<5` pin matters for the current public LeWM checkpoints: the
@@ -71,11 +72,11 @@ weights use the Hugging Face ViT 4.x key layout (`encoder.encoder.layer.*`).
 Then compare Candle outputs against the Python fixture:
 
 ```bash
-cd /Users/rozgo/vertex/stable-worldmodel-rs
+cd ../stable-worldmodel-rs
 cargo run --bin lewm-compare-fixture -- \
   --fixture target/lewm-pusht-fixture.npz \
-  --weights /Users/rozgo/.stable_worldmodel/checkpoints/models--quentinll--lewm-pusht/weights.pt \
-  --config /Users/rozgo/.stable_worldmodel/checkpoints/models--quentinll--lewm-pusht/config.json \
+  --weights ~/.stable_worldmodel/checkpoints/models--quentinll--lewm-pusht/weights.pt \
+  --config ~/.stable_worldmodel/checkpoints/models--quentinll--lewm-pusht/config.json \
   --tolerance 1e-2
 ```
 
