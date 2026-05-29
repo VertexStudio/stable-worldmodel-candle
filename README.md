@@ -81,6 +81,24 @@ cargo run --features hub --bin lewm-compare-fixture -- \
 The current verified PushT fixture covers pixel encoding, action embedding,
 single-step prediction, latent rollout, and goal cost.
 
+## Deployment Artifacts
+
+The preferred runtime package is a directory with explicit model, preprocessing,
+and I/O schema metadata:
+
+```text
+config.json
+model.safetensors
+preprocess.json
+schema.json
+```
+
+`weights.pt` is accepted as a compatibility fallback when `model.safetensors` is
+not present. `schema.json` describes observation names, observation kinds
+(`state`, `image`, or `video`), observation shapes, and action dimensionality.
+`preprocess.json` records runtime preprocessing metadata such as image size,
+normalization, and action bounds.
+
 For backend parity, generate CPU and CUDA Python fixtures from identical CPU
 input tensors, then compare them before comparing Candle:
 

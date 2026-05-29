@@ -1,5 +1,6 @@
 //! Candle inference components for stable-worldmodel.
 
+pub mod artifact;
 pub mod checkpoint;
 pub mod config;
 #[cfg(feature = "hub")]
