@@ -6,26 +6,18 @@ The crate is structured like Candle model support: model families are peers unde
 `src/models/`, examples and CLIs opt into a specific architecture, and the
 top-level API stays neutral.
 
-LeWM is the first implemented backend because its inference graph is compact and
-maps directly to Candle primitives:
-
-```text
-pixels -> Hugging Face ViTModel encoder -> projector
-actions -> action embedder
-embeddings + action embeddings -> AdaLN predictor -> rollout/cost
-```
+Supported backends are implemented as sibling modules behind a neutral top-level
+API.
 
 ## Current Scope
 
 - Neutral top-level modules: `checkpoint`, `config`, and `models`.
-- First model backend: `models::lewm`.
-- Second model backend: `models::tdmpc2` for state/vector observations.
-- LeWM ViT-Tiny encoder matching `stable_pretraining.backbone.utils.vit_hf(size="tiny", patch_size=14, image_size=224, pretrained=false, use_mask_token=false)`.
-- LeWM projector, action encoder, conditional predictor, latent rollout, and goal MSE cost.
+- `models::lewm`: ViT-Tiny encoder, projector, action encoder, conditional predictor, latent rollout, and goal MSE cost.
+- `models::tdmpc2`: state/vector observation encoder, latent dynamics, reward/Q heads, actor mean action, and candidate cost scoring.
 - Loading from PyTorch `.pt` state dicts via `VarBuilder::from_pth`, or from `.safetensors`.
 - Optional Hugging Face Hub checkpoint download support behind `--features hub`.
 - Rust 2024 edition with local Candle path dependencies from `../candle`.
-- LeWM and TD-MPC2 shape smoke-test CLIs:
+- Backend-specific shape smoke-test CLIs:
 
 ```bash
 cargo run --bin lewm-inspect -- --action-dim 2
@@ -136,7 +128,7 @@ src/
 ├── config.rs            # top-level model selection config
 ├── models/
 │   ├── mod.rs
-│   └── lewm/            # first supported model backend
+│   └── lewm/            # LeWM backend
 │   └── tdmpc2/          # state/vector TD-MPC2 backend
 └── bin/
     └── lewm-inspect.rs  # LeWM smoke-test CLI
@@ -179,4 +171,4 @@ checkpoint plus config.
 - Add TD-MPC2 pixel CNN support and policy rollout sampling.
 - Port CEM/iCEM/MPPI planner loops in Rust, keeping candidate evaluation on the selected Candle device.
 - Add optional safetensors export guidance for deployments that prefer mmap loading.
-- Add sibling model backends after LeWM, starting from the simplest production inference path for each model.
+- Add additional sibling model backends starting from the simplest production inference path for each model.
