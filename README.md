@@ -2,7 +2,7 @@
 
 Rust/Candle inference runtime for `stable-worldmodel` checkpoints.
 
-![stable-worldmodel platform overview](https://pbs.twimg.com/media/HJamxUsWQAIilkQ?format=jpg&name=large)
+![stable-worldmodel Candle runtime overview](docs/stable-worldmodel-runtime.png)
 
 Model implementations live under `src/models/`. Shared checkpoint and config
 helpers live at the crate root, and CLIs select a backend explicitly.
@@ -67,8 +67,7 @@ cd ../stable-worldmodel-candle
 cargo run --bin lewm-compare-fixture -- \
   --fixture target/lewm-pusht-fixture.npz \
   --weights ~/.stable_worldmodel/checkpoints/models--quentinll--lewm-pusht/weights.pt \
-  --config ~/.stable_worldmodel/checkpoints/models--quentinll--lewm-pusht/config.json \
-  --tolerance 1e-2
+  --config ~/.stable_worldmodel/checkpoints/models--quentinll--lewm-pusht/config.json
 ```
 
 Or let Rust download the same HF files through Candle-style hub support:
@@ -76,8 +75,7 @@ Or let Rust download the same HF files through Candle-style hub support:
 ```bash
 cargo run --features hub --bin lewm-compare-fixture -- \
   --fixture target/lewm-pusht-fixture.npz \
-  --hf-repo quentinll/lewm-pusht \
-  --tolerance 1e-2
+  --hf-repo quentinll/lewm-pusht
 ```
 
 The current verified PushT fixture covers pixel encoding, action embedding,
