@@ -17,7 +17,9 @@ use stable_worldmodel_candle::{
         lewm::{LeWm, LeWmConfig},
         tdmpc2::{TdMpc2, TdMpc2Config},
     },
+    planner::{CemConfig, CemPlanner, IcemConfig, IcemPlanner, MppiConfig, MppiPlanner},
     runtime::{DTypeSpec, DeviceSpec},
+    session::TdMpc2Session,
 };
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -51,6 +53,12 @@ struct Args {
 
     #[arg(long, default_value_t = 5)]
     horizon: usize,
+
+    #[arg(long, default_value_t = 2)]
+    planner_iterations: usize,
+
+    #[arg(long)]
+    elites: Option<usize>,
 
     #[arg(long, default_value_t = false)]
     json: bool,
@@ -107,6 +115,8 @@ fn main() -> anyhow::Result<()> {
                 "batch_size": args.batch_size,
                 "samples": args.samples,
                 "horizon": args.horizon,
+                "planner_iterations": args.planner_iterations,
+                "elites": elite_count(&args),
                 "warmup": args.warmup,
                 "iters": args.iters,
                 "stats": rows,
@@ -114,7 +124,7 @@ fn main() -> anyhow::Result<()> {
         );
     } else {
         println!(
-            "runtime-bench git={} model={:?} device={} dtype={} batch={} samples={} horizon={} warmup={} iters={}",
+            "runtime-bench git={} model={:?} device={} dtype={} batch={} samples={} horizon={} planner_iterations={} elites={} warmup={} iters={}",
             git_commit(),
             args.model,
             args.device,
@@ -122,6 +132,8 @@ fn main() -> anyhow::Result<()> {
             args.batch_size,
             args.samples,
             args.horizon,
+            args.planner_iterations,
+            elite_count(&args),
             args.warmup,
             args.iters
         );
@@ -214,6 +226,40 @@ fn bench_tdmpc2(
     )?
     .to_dtype(dtype)?;
 
+    let session_model = TdMpc2::new(
+        TdMpc2Config::state_only(args.state_dim, args.action_dim),
+        checkpoint::empty_var_builder(dtype, device),
+    )?;
+    let mut session = TdMpc2Session::new(session_model, device.clone(), dtype);
+    session.reset_state(&state)?;
+
+    if args.samples < 2 {
+        anyhow::bail!("TD-MPC2 planning benchmarks require --samples >= 2");
+    }
+    if args.planner_iterations == 0 {
+        anyhow::bail!("--planner-iterations must be greater than zero");
+    }
+    let elites = elite_count(args);
+    if elites < 2 {
+        anyhow::bail!("TD-MPC2 planning benchmarks require --elites >= 2");
+    }
+    if elites > args.samples {
+        anyhow::bail!("--elites cannot exceed --samples");
+    }
+
+    let mut cem_cfg = CemConfig::new(args.horizon, args.samples, elites, args.action_dim);
+    cem_cfg.iterations = args.planner_iterations;
+    let cem = CemPlanner::new(cem_cfg);
+
+    let mut mppi_cfg = MppiConfig::new(args.horizon, args.samples, args.action_dim);
+    mppi_cfg.iterations = args.planner_iterations;
+    let mppi = MppiPlanner::new(mppi_cfg);
+
+    let mut icem_cfg = IcemConfig::new(args.horizon, args.samples, elites, args.action_dim);
+    icem_cfg.iterations = args.planner_iterations;
+    icem_cfg.keep_elites = elites.min(args.samples);
+    let mut icem = IcemPlanner::new(icem_cfg);
+
     Ok(vec![
         bench("encode", args, device, || {
             model.encode_state(&state)?;
@@ -233,7 +279,29 @@ fn bench_tdmpc2(
             model.get_cost_state(&state, &action_candidates)?;
             Ok(())
         })?,
+        bench("plan_cem", args, device, || {
+            cem.plan(&session)?;
+            Ok(())
+        })?,
+        bench("plan_mppi", args, device, || {
+            mppi.plan(&session)?;
+            Ok(())
+        })?,
+        bench("plan_icem", args, device, || {
+            icem.plan(&session)?;
+            Ok(())
+        })?,
     ])
+}
+
+fn elite_count(args: &Args) -> usize {
+    args.elites.unwrap_or_else(|| {
+        if args.samples < 2 {
+            args.samples
+        } else {
+            (args.samples / 4).clamp(2, args.samples)
+        }
+    })
 }
 
 fn bench<F>(

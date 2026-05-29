@@ -38,7 +38,7 @@ predictable and deployment practical.
 - Rust preprocessing exists for decoded RGB frames, state arrays, and action
   arrays; optional file/video decode support is still pending.
 - `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
-  and TD-MPC2 paths.
+  and TD-MPC2 paths, including TD-MPC2 CEM/MPPI/iCEM planning latency.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
 - CEM exists as the first Rust-native planning solver. It keeps candidate
   generation, rollout/scoring, and elite gathering in Candle tensors, but it
@@ -255,6 +255,8 @@ overhead.
 - Host score ranking is currently explicit in
   `PlanResult::used_host_elite_selection`; replacing it with device-native
   top-k/sort remains part of this phase.
+- `runtime-bench --model td-mpc2` reports CEM, MPPI, and iCEM planner latency
+  using the same session/scorer path as deployment code.
 
 **Done When**
 
@@ -288,7 +290,8 @@ Make control-loop timing predictable.
 **Done When**
 
 - Deadline behavior is deterministic and tested.
-- Benchmarks report full planning latency and fallback rates.
+- Benchmarks report full planning latency. Fallback rates are pending fallback
+  policy support.
 - Repeated planning loops show lower p95/p99 latency after optimization.
 
 ## Phase 8: Precision Modes

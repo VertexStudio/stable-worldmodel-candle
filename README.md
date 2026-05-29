@@ -288,13 +288,16 @@ cargo run --release --features cuda --bin runtime-bench -- \
   --device cuda:0 \
   --samples 64 \
   --horizon 5 \
+  --planner-iterations 2 \
   --json
 ```
 
 The benchmark synchronizes the selected Candle device around timed sections, so
 CUDA and Metal timings include queued device work rather than just launch
 overhead. Current sections cover synthetic encode, dynamics where applicable,
-rollout or scoring, and an end-to-end synthetic path.
+rollout or scoring, an end-to-end synthetic path, and TD-MPC2 planner latency
+for CEM, MPPI, and iCEM. Planner sections reuse a reset `TdMpc2Session`, so they
+measure the hot MPC loop after observation encoding has been cached.
 
 ## Runtime Sessions
 
