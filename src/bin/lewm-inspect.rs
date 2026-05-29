@@ -6,9 +6,11 @@ extern crate intel_mkl_src;
 use std::path::PathBuf;
 
 use candle::{DType, Device, IndexOp, Tensor};
-use candle_nn::{VarBuilder, VarMap};
 use clap::{Parser, ValueEnum};
-use stable_worldmodel_rs::models::lewm::{LeWm, LeWmConfig};
+use stable_worldmodel_rs::{
+    checkpoint,
+    models::lewm::{LeWm, LeWmConfig},
+};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum DeviceArg {
@@ -60,14 +62,8 @@ fn main() -> anyhow::Result<()> {
     let cfg = LeWmConfig::tiny_patch14_224(args.action_dim);
 
     let vb = match args.weights.as_ref() {
-        Some(path) if path.extension().and_then(|s| s.to_str()) == Some("safetensors") => unsafe {
-            VarBuilder::from_mmaped_safetensors(&[path], dtype, &device)?
-        },
-        Some(path) => VarBuilder::from_pth(path, dtype, &device)?,
-        None => {
-            let vars = VarMap::new();
-            VarBuilder::from_varmap(&vars, dtype, &device)
-        }
+        Some(path) => checkpoint::var_builder_from_path(path, dtype, &device)?,
+        None => checkpoint::empty_var_builder(dtype, &device),
     };
 
     let model = LeWm::new(cfg, vb)?;
