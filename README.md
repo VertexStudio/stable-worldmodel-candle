@@ -2,6 +2,8 @@
 
 Rust/Candle inference runtime for `stable-worldmodel` checkpoints.
 
+![stable-worldmodel platform overview](https://pbs.twimg.com/media/HJamxUsWQAIilkQ?format=jpg&name=large)
+
 Model implementations live under `src/models/`. Shared checkpoint and config
 helpers live at the crate root, and CLIs select a backend explicitly.
 
