@@ -81,6 +81,25 @@ cargo run --features hub --bin lewm-compare-fixture -- \
 The current verified PushT fixture covers pixel encoding, action embedding,
 single-step prediction, latent rollout, and goal cost.
 
+TD-MPC2 state/vector fixture export uses a deterministic Python model and saves
+both an `.npz` fixture and a `.pt` state dict:
+
+```bash
+cd stable-worldmodel
+uv run --python 3.12 --no-dev \
+  --with imageio \
+  python ../stable-worldmodel-candle/tools/export_tdmpc2_fixture.py \
+  --stable-worldmodel-root . \
+  --device cpu \
+  --output ../stable-worldmodel-candle/target/tdmpc2-state-python-cpu.npz \
+  --weights-output ../stable-worldmodel-candle/target/tdmpc2-state-weights.pt
+
+cd ../stable-worldmodel-candle
+cargo run --bin tdmpc2-compare-fixture -- \
+  --fixture target/tdmpc2-state-python-cpu.npz \
+  --weights target/tdmpc2-state-weights.pt
+```
+
 ## Deployment Artifacts
 
 The preferred runtime package is a directory with explicit model, preprocessing,

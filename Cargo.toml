@@ -57,3 +57,7 @@ path = "src/bin/lewm-compare-fixture.rs"
 [[bin]]
 name = "runtime-bench"
 path = "src/bin/runtime-bench.rs"
+
+[[bin]]
+name = "tdmpc2-compare-fixture"
+path = "src/bin/tdmpc2-compare-fixture.rs"
