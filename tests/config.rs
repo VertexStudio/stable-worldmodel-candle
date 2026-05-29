@@ -1,4 +1,7 @@
-use stable_worldmodel_rs::models::lewm::{LeWmConfig, NormKind};
+use stable_worldmodel_rs::{
+    config::{ModelConfig, ModelKind},
+    models::lewm::{LeWmConfig, NormKind},
+};
 
 #[test]
 fn tiny_patch14_defaults_match_python_config() {
@@ -30,4 +33,14 @@ fn config_round_trips_through_json() {
     assert_eq!(decoded.action_encoder.input_dim, 4);
     assert_eq!(decoded.encoder.patch_size, cfg.encoder.patch_size);
     assert_eq!(decoded.predictor.hidden_dim, cfg.predictor.hidden_dim);
+}
+
+#[test]
+fn top_level_model_config_is_not_lewm_specific() {
+    let cfg = ModelConfig::lewm_tiny_patch14_224(2);
+
+    assert_eq!(cfg.kind(), ModelKind::LeWm);
+
+    let json = serde_json::to_string(&cfg).unwrap();
+    assert!(json.contains("\"model_type\":\"le_wm\""));
 }
