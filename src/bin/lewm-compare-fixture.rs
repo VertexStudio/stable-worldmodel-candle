@@ -6,7 +6,7 @@ extern crate intel_mkl_src;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use candle::{DType, Device, Tensor};
+use candle::{DType, Device, IndexOp, Tensor};
 use clap::{Parser, ValueEnum};
 use stable_worldmodel_rs::{
     checkpoint,
@@ -106,11 +106,33 @@ fn main() -> anyhow::Result<()> {
     let (_, h, d) = emb.dims3()?;
     let emb_init = emb.unsqueeze(1)?.broadcast_as((b, s, h, d))?;
     let rollout = model.rollout_embeddings(&emb_init, &action_candidates)?;
+    report_time_slices("rollout", &rollout, &arrays[7])?;
     compare("rollout", &rollout, &arrays[7], args.tolerance)?;
 
     let cost = model.goal_cost(&rollout, &goal_emb)?;
     compare("cost", &cost, &arrays[8], args.tolerance)?;
 
+    Ok(())
+}
+
+fn report_time_slices(name: &str, actual: &Tensor, expected: &Tensor) -> anyhow::Result<()> {
+    if actual.shape() != expected.shape() || actual.rank() < 3 {
+        return Ok(());
+    }
+    let time_dim = actual.rank() - 2;
+    let time = actual.dim(time_dim)?;
+    for idx in 0..time {
+        let actual_slice = actual.i((.., .., idx, ..))?;
+        let expected_slice = expected.i((.., .., idx, ..))?;
+        let expected_slice = expected_slice
+            .to_device(actual.device())?
+            .to_dtype(DType::F32)?;
+        let actual_slice = actual_slice.to_dtype(DType::F32)?;
+        let diff = (actual_slice - expected_slice)?.abs()?;
+        let max_abs = diff.max_all()?.to_scalar::<f32>()?;
+        let mean_abs = diff.mean_all()?.to_scalar::<f32>()?;
+        println!("{name}[t={idx}]: max_abs={max_abs:.6e} mean_abs={mean_abs:.6e}");
+    }
     Ok(())
 }
 

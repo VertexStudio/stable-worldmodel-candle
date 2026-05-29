@@ -150,9 +150,9 @@ impl ActionEmbedder {
 impl Module for ActionEmbedder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = xs.to_dtype(DType::F32)?;
-        let xs = xs.permute((0, 2, 1))?;
+        let xs = xs.permute((0, 2, 1))?.contiguous()?;
         let xs = self.patch_embed.forward(&xs)?;
-        let xs = xs.permute((0, 2, 1))?;
+        let xs = xs.permute((0, 2, 1))?.contiguous()?;
         let xs = self.fc1.forward(&xs)?.silu()?;
         self.fc2.forward(&xs)
     }
@@ -344,7 +344,7 @@ impl Predictor {
     pub fn forward(&self, xs: &Tensor, cond: &Tensor) -> Result<Tensor> {
         let t = xs.dim(1)?;
         let pos = self.pos_embedding.i((.., ..t, ..))?;
-        let xs = (xs + pos)?;
+        let xs = xs.broadcast_add(&pos)?;
         self.transformer.forward(&xs, cond)
     }
 }
