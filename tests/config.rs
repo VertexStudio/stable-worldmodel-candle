@@ -1,4 +1,4 @@
-use stable_worldmodel_rs::{
+use stable_worldmodel_candle::{
     config::{ModelConfig, ModelKind},
     models::lewm::{LeWmConfig, NormKind},
     models::tdmpc2::TdMpc2Config,

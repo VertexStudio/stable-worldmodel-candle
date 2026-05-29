@@ -2508,7 +2508,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "stable-worldmodel-rs"
+name = "stable-worldmodel-candle"
 version = "0.1.0"
 dependencies = [
  "accelerate-src",

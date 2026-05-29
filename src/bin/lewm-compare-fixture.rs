@@ -8,13 +8,13 @@ use std::path::PathBuf;
 use anyhow::Context;
 use candle::{DType, Device, IndexOp, Tensor};
 use clap::{Parser, ValueEnum};
-use stable_worldmodel_rs::{
+use stable_worldmodel_candle::{
     checkpoint,
     models::lewm::{LeWm, LeWmConfig},
 };
 
 #[cfg(feature = "hub")]
-use stable_worldmodel_rs::hub;
+use stable_worldmodel_candle::hub;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum DeviceArg {

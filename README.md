@@ -1,4 +1,4 @@
-# stable-worldmodel-rs
+# stable-worldmodel-candle
 
 Rust/Candle inference runtime for `stable-worldmodel`.
 
@@ -56,14 +56,14 @@ Official LeWM mirrors currently use this layout, for example
 To export a deterministic Python fixture from the original implementation:
 
 ```bash
-# From a checkout where stable-worldmodel and stable-worldmodel-rs are siblings.
+# From a checkout where stable-worldmodel and stable-worldmodel-candle are siblings.
 cd stable-worldmodel
 uv run --python 3.12 --no-dev --extra train \
   --with imageio --with 'transformers<5' \
-  python ../stable-worldmodel-rs/tools/export_lewm_fixture.py \
+  python ../stable-worldmodel-candle/tools/export_lewm_fixture.py \
   --stable-worldmodel-root . \
   --model quentinll/lewm-pusht \
-  --output ../stable-worldmodel-rs/target/lewm-pusht-fixture.npz
+  --output ../stable-worldmodel-candle/target/lewm-pusht-fixture.npz
 ```
 
 The `transformers<5` pin matters for the current public LeWM checkpoints: the
@@ -72,7 +72,7 @@ weights use the Hugging Face ViT 4.x key layout (`encoder.encoder.layer.*`).
 Then compare Candle outputs against the Python fixture:
 
 ```bash
-cd ../stable-worldmodel-rs
+cd ../stable-worldmodel-candle
 cargo run --bin lewm-compare-fixture -- \
   --fixture target/lewm-pusht-fixture.npz \
   --weights ~/.stable_worldmodel/checkpoints/models--quentinll--lewm-pusht/weights.pt \

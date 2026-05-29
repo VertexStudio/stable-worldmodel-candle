@@ -1,6 +1,6 @@
 use candle::{DType, Device, Tensor};
 use candle_nn::{VarBuilder, VarMap};
-use stable_worldmodel_rs::models::tdmpc2::{TdMpc2, TdMpc2Config};
+use stable_worldmodel_candle::models::tdmpc2::{TdMpc2, TdMpc2Config};
 
 fn model(state_dim: usize, action_dim: usize) -> candle::Result<TdMpc2> {
     let device = Device::Cpu;

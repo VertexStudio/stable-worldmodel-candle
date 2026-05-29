@@ -1,9 +1,9 @@
 [package]
-name = "stable-worldmodel-rs"
+name = "stable-worldmodel-candle"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-description = "Candle inference port for stable-worldmodel LeWM."
+description = "Candle inference backend for stable-worldmodel checkpoints."
 
 [dependencies]
 anyhow = "1.0.102"
@@ -39,7 +39,7 @@ mkl = [
 ]
 
 [lib]
-name = "stable_worldmodel_rs"
+name = "stable_worldmodel_candle"
 path = "src/lib.rs"
 
 [[bin]]

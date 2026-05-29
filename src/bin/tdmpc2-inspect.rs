@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use candle::{DType, Device, Tensor};
 use clap::{Parser, ValueEnum};
-use stable_worldmodel_rs::{
+use stable_worldmodel_candle::{
     checkpoint,
     models::tdmpc2::{TdMpc2, TdMpc2Config},
 };
