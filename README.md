@@ -187,6 +187,30 @@ For the Python CPU/CUDA fixture comparison, `pixels`, `actions`, and
 `action_candidates` were byte-identical because inputs are generated on CPU
 before being copied to the selected backend.
 
+## Runtime Benchmarks
+
+Synthetic latency baselines are available through `runtime-bench`:
+
+```bash
+cargo run --release --bin runtime-bench -- \
+  --model le-wm \
+  --device cpu \
+  --warmup 5 \
+  --iters 20
+
+cargo run --release --features cuda --bin runtime-bench -- \
+  --model td-mpc2 \
+  --device cuda:0 \
+  --samples 64 \
+  --horizon 5 \
+  --json
+```
+
+The benchmark synchronizes the selected Candle device around timed sections, so
+CUDA and Metal timings include queued device work rather than just launch
+overhead. Current sections cover synthetic encode, dynamics where applicable,
+rollout or scoring, and an end-to-end synthetic path.
+
 ## Source Layout
 
 ```text
