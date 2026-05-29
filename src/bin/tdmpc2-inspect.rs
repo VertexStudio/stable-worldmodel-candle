@@ -5,21 +5,13 @@ extern crate intel_mkl_src;
 
 use std::path::PathBuf;
 
-use candle::{DType, Device, Tensor};
-use clap::{Parser, ValueEnum};
+use candle::Tensor;
+use clap::Parser;
 use stable_worldmodel_candle::{
     checkpoint,
     models::tdmpc2::{TdMpc2, TdMpc2Config},
+    runtime::{DTypeSpec, DeviceSpec},
 };
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum DeviceArg {
-    Cpu,
-    #[cfg(feature = "cuda")]
-    Cuda,
-    #[cfg(feature = "metal")]
-    Metal,
-}
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -41,27 +33,26 @@ struct Args {
     #[arg(long, default_value_t = 3)]
     horizon: usize,
 
-    #[arg(long, value_enum, default_value_t = DeviceArg::Cpu)]
-    device: DeviceArg,
+    #[arg(long, default_value_t = DeviceSpec::Cpu)]
+    device: DeviceSpec,
 
+    #[arg(long, default_value_t = DTypeSpec::F32)]
+    dtype: DTypeSpec,
+
+    /// Deprecated; use --dtype bf16.
     #[arg(long, default_value_t = false)]
     bf16: bool,
 }
 
-fn device(arg: DeviceArg) -> candle::Result<Device> {
-    match arg {
-        DeviceArg::Cpu => Ok(Device::Cpu),
-        #[cfg(feature = "cuda")]
-        DeviceArg::Cuda => Device::new_cuda(0),
-        #[cfg(feature = "metal")]
-        DeviceArg::Metal => Device::new_metal(0),
-    }
-}
-
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let device = device(args.device)?;
-    let dtype = if args.bf16 { DType::BF16 } else { DType::F32 };
+    let device = args.device.resolve()?;
+    let dtype = if args.bf16 {
+        DTypeSpec::Bf16
+    } else {
+        args.dtype
+    }
+    .dtype();
     let cfg = TdMpc2Config::state_only(args.state_dim, args.action_dim);
 
     let vb = match args.weights.as_ref() {

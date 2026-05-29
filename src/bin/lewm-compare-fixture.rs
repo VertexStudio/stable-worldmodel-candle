@@ -6,24 +6,16 @@ extern crate intel_mkl_src;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use candle::{DType, Device, IndexOp, Tensor};
-use clap::{Parser, ValueEnum};
+use candle::{DType, IndexOp, Tensor};
+use clap::Parser;
 use stable_worldmodel_candle::{
     checkpoint,
     models::lewm::{LeWm, LeWmConfig},
+    runtime::DeviceSpec,
 };
 
 #[cfg(feature = "hub")]
 use stable_worldmodel_candle::hub;
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum DeviceArg {
-    Cpu,
-    #[cfg(feature = "cuda")]
-    Cuda,
-    #[cfg(feature = "metal")]
-    Metal,
-}
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -45,8 +37,8 @@ struct Args {
     #[arg(long, default_value_t = 10)]
     action_dim: usize,
 
-    #[arg(long, value_enum, default_value_t = DeviceArg::Cpu)]
-    device: DeviceArg,
+    #[arg(long, default_value_t = DeviceSpec::Cpu)]
+    device: DeviceSpec,
 
     /// Override every per-output tolerance.
     #[arg(long)]
@@ -68,19 +60,9 @@ struct Args {
     cost_tolerance: f32,
 }
 
-fn device(arg: DeviceArg) -> candle::Result<Device> {
-    match arg {
-        DeviceArg::Cpu => Ok(Device::Cpu),
-        #[cfg(feature = "cuda")]
-        DeviceArg::Cuda => Device::new_cuda(0),
-        #[cfg(feature = "metal")]
-        DeviceArg::Metal => Device::new_metal(0),
-    }
-}
-
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let device = device(args.device)?;
+    let device = args.device.resolve()?;
     let (weights, config) = resolve_files(&args)?;
 
     let cfg = match config.as_ref() {
