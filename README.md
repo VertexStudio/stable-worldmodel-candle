@@ -387,7 +387,8 @@ cargo build --release --features cuda
 ```
 
 The initial ABI matches the parity-covered TD-MPC2 runtime paths for state,
-pixel, and mixed state+pixel artifacts with CEM, MPPI, or iCEM planning. C
+pixel, and mixed state+pixel artifacts with CEM, MPPI, or iCEM planning. It also
+exposes LeWM image-history goal planning through the same planner configs. C
 callers load a deployment artifact, reset the current observation batch, and
 request an action:
 
@@ -406,6 +407,15 @@ status = swm_tdmpc2_reset_state_pixels(
 status = swm_tdmpc2_plan_cem(rt, cem_cfg, action_out, sequence_out, best_cost_out);
 status = swm_tdmpc2_plan_icem(rt, icem_cfg, action_out, sequence_out, best_cost_out);
 swm_tdmpc2_free(rt);
+
+SwmLeWm *lewm = NULL;
+status = swm_lewm_load("/path/to/lewm-artifact", "cuda:0", "f32", &lewm);
+status = swm_lewm_reset_pixels(
+    lewm, current_pixels_f32, batch, history_size, image_size, image_size);
+status = swm_lewm_set_goal_pixels(
+    lewm, goal_pixels_f32, batch, goal_frames, image_size, image_size);
+status = swm_lewm_plan_cem(lewm, cem_cfg, action_out, sequence_out, best_cost_out);
+swm_lewm_free(lewm);
 ```
 
 `swm_last_error_message()` returns a thread-local error string after non-OK
@@ -414,11 +424,12 @@ statuses. The matching declarations live in
 tensors already resized and normalized for the model, with explicit NCHW or
 NHWC layout. `swm_tdmpc2_plan_icem` keeps its shifted warm-start sequence inside
 the runtime handle; call `swm_tdmpc2_clear_icem_warm_start` when resetting an
-episode. The LeWM C ABI surface remains future work; the Rust API already
-exposes those planner/session pieces where implemented.
+episode. `swm_lewm_reset_pixels` expects `[batch, time, 3, image_size,
+image_size]` f32 history tensors; set a goal with `swm_lewm_set_goal_pixels`
+before calling a LeWM planner entrypoint.
 
-Latest local C ABI validation after adding pixel and iCEM entrypoints, run on
-2026-05-29:
+Latest local C ABI validation after adding TD-MPC2 pixel/iCEM and LeWM
+entrypoints, run on 2026-05-29:
 
 - `cargo test --locked` passed.
 - `cargo test --locked --features cuda` passed.
@@ -476,5 +487,5 @@ checkpoint plus config.
 - Add TD-MPC2 pixel fixture parity and policy rollout sampling.
 - Add planner buffer reuse/preallocation for lower steady-state allocation cost.
 - Add optional safetensors export guidance for deployments that prefer mmap loading.
-- Expand the C ABI to LeWM once that deployment path stabilizes.
+- Add C ABI overhead benchmarks for TD-MPC2 and LeWM deployment calls.
 - Add additional sibling model backends starting from the simplest production inference path for each model.

@@ -50,7 +50,7 @@ predictable and deployment practical.
   iterations, and a shifted warm-start sequence between `plan` calls.
 - Deployment interfaces are currently the Rust library, CLI tools, and an
   initial C ABI for TD-MPC2 state/vector, pixel, and mixed state+pixel
-  CEM/MPPI/iCEM planning.
+  CEM/MPPI/iCEM planning plus LeWM image-history goal planning.
 
 ## Phase 1: Baseline Parity And Benchmarks
 
@@ -345,7 +345,8 @@ Expose the stable runtime without forcing a Python service.
   loading, observation reset, dimension accessors, CEM planning, MPPI planning,
   iCEM planning with persistent warm-start state, handle cleanup, and
   thread-local error reporting.
-- LeWM C ABI entrypoints are still pending.
+- `ffi` exposes LeWM artifact loading, image-history reset, goal pixel setup,
+  CEM/MPPI/iCEM planning, handle cleanup, and thread-local error reporting.
 
 **Done When**
 

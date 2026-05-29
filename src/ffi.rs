@@ -11,12 +11,16 @@ use crate::{
     artifact::{DeploymentArtifact, PreprocessConfig, RuntimeSchema},
     checkpoint,
     config::ModelConfig,
-    models::tdmpc2::{TdMpc2, TdMpc2Config},
+    models::{
+        lewm::{LeWm, LeWmConfig},
+        tdmpc2::{TdMpc2, TdMpc2Config},
+    },
     planner::{
-        ActionBounds, CemConfig, CemPlanner, IcemConfig, IcemPlanner, MppiConfig, MppiPlanner,
+        ActionBounds, CemConfig, CemPlanner, IcemConfig, IcemPlanner, LeWmGoalScorer, MppiConfig,
+        MppiPlanner,
     },
     runtime::{DTypeSpec, DeviceSpec},
-    session::TdMpc2Session,
+    session::{LeWmSession, TdMpc2Session},
 };
 
 type FfiResult<T> = std::result::Result<T, FfiError>;
@@ -123,6 +127,16 @@ pub struct SwmTdMpc2 {
     icem_planner: Option<IcemPlanner>,
 }
 
+pub struct SwmLeWm {
+    session: LeWmSession,
+    goal_emb: Option<Tensor>,
+    action_dim: usize,
+    image_size: usize,
+    history_size: usize,
+    action_bounds: ActionBounds,
+    icem_planner: Option<IcemPlanner>,
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn swm_last_error_message() -> *const c_char {
     LAST_ERROR.with(|last| {
@@ -182,7 +196,67 @@ pub unsafe extern "C" fn swm_tdmpc2_load(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_load(
+    artifact_dir: *const c_char,
+    device: *const c_char,
+    dtype: *const c_char,
+    out: *mut *mut SwmLeWm,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let artifact_dir = unsafe { required_string(artifact_dir, "artifact_dir")? };
+        let device = unsafe { optional_string(device)? }
+            .as_deref()
+            .unwrap_or("cpu")
+            .parse::<DeviceSpec>()
+            .map_err(FfiError::invalid)?
+            .resolve()
+            .map_err(FfiError::runtime)?;
+        let dtype = unsafe { optional_string(dtype)? }
+            .as_deref()
+            .unwrap_or("f32")
+            .parse::<DTypeSpec>()
+            .map_err(FfiError::invalid)?
+            .dtype();
+        let out = unsafe { required_mut(out, "out")? };
+
+        let artifact = DeploymentArtifact::from_dir(&artifact_dir).map_err(FfiError::runtime)?;
+        let ModelConfig::LeWm(config) = artifact.config.clone() else {
+            return Err(FfiError::invalid(
+                "swm_lewm_load only supports le_wm artifacts",
+            ));
+        };
+        let action_dim = config.action_encoder.input_dim;
+        let image_size = config.encoder.image_size;
+        let history_size = config.history_size;
+        let action_bounds =
+            action_bounds_from_schema(&artifact.schema, &artifact.preprocess, action_dim)?;
+        let session = load_lewm_session(config, &artifact.weights, dtype, &device)?;
+
+        let handle = Box::new(SwmLeWm {
+            session,
+            goal_emb: None,
+            action_dim,
+            image_size,
+            history_size,
+            action_bounds,
+            icem_planner: None,
+        });
+        *out = Box::into_raw(handle);
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn swm_tdmpc2_free(handle: *mut SwmTdMpc2) {
+    if !handle.is_null() {
+        unsafe {
+            drop(Box::from_raw(handle));
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_free(handle: *mut SwmLeWm) {
     if !handle.is_null() {
         unsafe {
             drop(Box::from_raw(handle));
@@ -230,6 +304,39 @@ pub unsafe extern "C" fn swm_tdmpc2_action_dim(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_action_dim(handle: *const SwmLeWm, out: *mut usize) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_ref(handle, "handle")? };
+        let out = unsafe { required_mut(out, "out")? };
+        *out = handle.action_dim;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_image_size(handle: *const SwmLeWm, out: *mut usize) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_ref(handle, "handle")? };
+        let out = unsafe { required_mut(out, "out")? };
+        *out = handle.image_size;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_history_size(
+    handle: *const SwmLeWm,
+    out: *mut usize,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_ref(handle, "handle")? };
+        let out = unsafe { required_mut(out, "out")? };
+        *out = handle.history_size;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn swm_tdmpc2_reset_state(
     handle: *mut SwmTdMpc2,
     state: *const f32,
@@ -248,6 +355,56 @@ pub unsafe extern "C" fn swm_tdmpc2_reset_state(
             .session
             .reset_state(&state)
             .map_err(FfiError::runtime)?;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_reset_pixels(
+    handle: *mut SwmLeWm,
+    pixels: *const f32,
+    batch: usize,
+    time: usize,
+    height: usize,
+    width: usize,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        if time != handle.history_size {
+            return Err(FfiError::invalid(format!(
+                "LeWM current pixel history must have time={} frames, got {time}",
+                handle.history_size
+            )));
+        }
+        let pixels =
+            unsafe { lewm_pixels_from_ffi(handle, pixels, batch, time, height, width, "pixels")? };
+        handle
+            .session
+            .reset_pixels(&pixels)
+            .map_err(FfiError::runtime)?;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_set_goal_pixels(
+    handle: *mut SwmLeWm,
+    pixels: *const f32,
+    batch: usize,
+    time: usize,
+    height: usize,
+    width: usize,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let pixels = unsafe {
+            lewm_pixels_from_ffi(handle, pixels, batch, time, height, width, "goal_pixels")?
+        };
+        let goal_emb = handle
+            .session
+            .encode_pixels(&pixels)
+            .map_err(FfiError::runtime)?;
+        handle.goal_emb = Some(goal_emb);
         Ok(())
     })
 }
@@ -402,7 +559,132 @@ pub unsafe extern "C" fn swm_tdmpc2_plan_icem(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_plan_cem(
+    handle: *mut SwmLeWm,
+    ffi_config: SwmCemPlanConfig,
+    action_out: *mut f32,
+    sequence_out: *mut f32,
+    best_cost_out: *mut f32,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let goal_emb = handle
+            .goal_emb
+            .as_ref()
+            .ok_or_else(|| FfiError::invalid("LeWM goal pixels must be set before planning"))?;
+        let mut config = CemConfig::new(
+            ffi_config.horizon,
+            ffi_config.samples,
+            ffi_config.elites,
+            handle.action_dim,
+        );
+        config.iterations = ffi_config.iterations;
+        config.init_std = ffi_config.init_std;
+        config.min_std = ffi_config.min_std;
+        config.action_bounds = handle.action_bounds.clone();
+
+        let scorer = LeWmGoalScorer::new(&handle.session, goal_emb);
+        let result = CemPlanner::new(config)
+            .plan(&scorer)
+            .map_err(FfiError::runtime)?;
+        copy_plan_outputs(
+            &result.first_action,
+            &result.sequence,
+            &result.scores,
+            &result.best_indices,
+            action_out,
+            sequence_out,
+            best_cost_out,
+        )
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_plan_mppi(
+    handle: *mut SwmLeWm,
+    ffi_config: SwmMppiPlanConfig,
+    action_out: *mut f32,
+    sequence_out: *mut f32,
+    best_cost_out: *mut f32,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let goal_emb = handle
+            .goal_emb
+            .as_ref()
+            .ok_or_else(|| FfiError::invalid("LeWM goal pixels must be set before planning"))?;
+        let mut config = MppiConfig::new(ffi_config.horizon, ffi_config.samples, handle.action_dim);
+        config.iterations = ffi_config.iterations;
+        config.noise_std = ffi_config.noise_std;
+        config.temperature = ffi_config.temperature;
+        config.action_bounds = handle.action_bounds.clone();
+
+        let scorer = LeWmGoalScorer::new(&handle.session, goal_emb);
+        let result = MppiPlanner::new(config)
+            .plan(&scorer)
+            .map_err(FfiError::runtime)?;
+        copy_plan_outputs(
+            &result.first_action,
+            &result.sequence,
+            &result.scores,
+            &result.best_indices,
+            action_out,
+            sequence_out,
+            best_cost_out,
+        )
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_plan_icem(
+    handle: *mut SwmLeWm,
+    ffi_config: SwmIcemPlanConfig,
+    action_out: *mut f32,
+    sequence_out: *mut f32,
+    best_cost_out: *mut f32,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let goal_emb = handle
+            .goal_emb
+            .as_ref()
+            .ok_or_else(|| FfiError::invalid("LeWM goal pixels must be set before planning"))?;
+        let config = icem_config_from_ffi(ffi_config, handle.action_dim, &handle.action_bounds);
+        let planner = match handle.icem_planner.as_mut() {
+            Some(planner) if planner.config() == &config => planner,
+            _ => {
+                handle.icem_planner = Some(IcemPlanner::new(config));
+                handle.icem_planner.as_mut().expect("iCEM planner set")
+            }
+        };
+
+        let scorer = LeWmGoalScorer::new(&handle.session, goal_emb);
+        let result = planner.plan(&scorer).map_err(FfiError::runtime)?;
+        copy_plan_outputs(
+            &result.first_action,
+            &result.sequence,
+            &result.scores,
+            &result.best_indices,
+            action_out,
+            sequence_out,
+            best_cost_out,
+        )
+    })
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn swm_tdmpc2_clear_icem_warm_start(handle: *mut SwmTdMpc2) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        if let Some(planner) = handle.icem_planner.as_mut() {
+            planner.clear_warm_start();
+        }
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_clear_icem_warm_start(handle: *mut SwmLeWm) -> SwmStatus {
     ffi_guard(|| {
         let handle = unsafe { required_mut(handle, "handle")? };
         if let Some(planner) = handle.icem_planner.as_mut() {
@@ -441,6 +723,53 @@ fn load_tdmpc2_session(
         checkpoint::var_builder_from_path(weights, dtype, device).map_err(FfiError::runtime)?;
     let model = TdMpc2::new(config, vb).map_err(FfiError::runtime)?;
     Ok(TdMpc2Session::new(model, device.clone(), dtype))
+}
+
+fn load_lewm_session(
+    config: LeWmConfig,
+    weights: &std::path::Path,
+    dtype: DType,
+    device: &Device,
+) -> FfiResult<LeWmSession> {
+    let vb =
+        checkpoint::var_builder_from_path(weights, dtype, device).map_err(FfiError::runtime)?;
+    let model = LeWm::new(config, vb).map_err(FfiError::runtime)?;
+    Ok(LeWmSession::new(model, device.clone(), dtype))
+}
+
+unsafe fn lewm_pixels_from_ffi(
+    handle: &SwmLeWm,
+    pixels: *const f32,
+    batch: usize,
+    time: usize,
+    height: usize,
+    width: usize,
+    name: &str,
+) -> FfiResult<Tensor> {
+    if batch == 0 || time == 0 {
+        return Err(FfiError::invalid(
+            "LeWM pixel batch and time must be greater than zero",
+        ));
+    }
+    if height != handle.image_size || width != handle.image_size {
+        return Err(FfiError::invalid(format!(
+            "LeWM pixel input must match image_size {}, got {height}x{width}",
+            handle.image_size
+        )));
+    }
+    let len = batch
+        .checked_mul(time)
+        .and_then(|len| len.checked_mul(3))
+        .and_then(|len| len.checked_mul(height))
+        .and_then(|len| len.checked_mul(width))
+        .ok_or_else(|| FfiError::invalid("LeWM pixel length overflow"))?;
+    let pixels = unsafe { required_slice(pixels, len, name)? };
+    Tensor::from_slice(
+        pixels,
+        (batch, time, 3usize, height, width),
+        handle.session.device(),
+    )
+    .map_err(FfiError::runtime)
 }
 
 unsafe fn state_tensor_from_ffi(

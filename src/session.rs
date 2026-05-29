@@ -32,10 +32,14 @@ impl LeWmSession {
     }
 
     pub fn reset_pixels(&mut self, pixels: &Tensor) -> Result<Tensor> {
-        let pixels = pixels.to_device(&self.device)?.to_dtype(self.dtype)?;
-        let emb = self.model.encode_pixels(&pixels)?;
+        let emb = self.encode_pixels(pixels)?;
         self.emb = Some(emb.clone());
         Ok(emb)
+    }
+
+    pub fn encode_pixels(&self, pixels: &Tensor) -> Result<Tensor> {
+        let pixels = pixels.to_device(&self.device)?.to_dtype(self.dtype)?;
+        self.model.encode_pixels(&pixels)
     }
 
     pub fn cached_embedding(&self) -> Option<&Tensor> {
