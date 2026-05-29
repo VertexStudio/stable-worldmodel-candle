@@ -35,7 +35,7 @@ fn cem_plans_tdmpc2_action_sequence() -> anyhow::Result<()> {
     assert_eq!(result.scores.dims(), &[batch, 8]);
     assert_eq!(result.best_indices.len(), batch);
     assert_eq!(result.iterations_completed, 2);
-    assert!(result.used_host_elite_selection);
+    assert!(!result.used_host_elite_selection);
 
     for action in result.first_action.to_vec2::<f32>()? {
         for value in action {
@@ -147,7 +147,7 @@ fn icem_keeps_shifted_warm_start_between_plans() -> anyhow::Result<()> {
     assert_eq!(first.scores.dims(), &[batch, 10]);
     assert_eq!(first.best_indices.len(), batch);
     assert_eq!(first.iterations_completed, 2);
-    assert!(first.used_host_elite_selection);
+    assert!(!first.used_host_elite_selection);
     assert_eq!(warm_start.dims(), &[batch, 3, action_dim]);
     assert_eq!(second.first_action.dims(), &[batch, action_dim]);
     assert!(planner.warm_start_sequence().is_some());

@@ -42,13 +42,12 @@ predictable and deployment practical.
   and TD-MPC2 paths, including TD-MPC2 CEM/MPPI/iCEM planning latency.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
 - CEM exists as the first Rust-native planning solver. It keeps candidate
-  generation, rollout/scoring, and elite gathering in Candle tensors, but it
-  currently ranks scores on the host because Candle 0.10 has no general
-  top-k/sort primitive.
+  generation, rollout/scoring, and elite selection in Candle tensors on the
+  selected device.
 - MPPI exists and keeps its softmax-weighted control update in Candle tensors
   on the selected device.
-- iCEM exists with elite carryover between iterations and a shifted warm-start
-  sequence between `plan` calls.
+- iCEM exists with device-side elite selection, elite carryover between
+  iterations, and a shifted warm-start sequence between `plan` calls.
 - Deployment interfaces are currently the Rust library, CLI tools, and an
   initial C ABI for TD-MPC2 state/vector CEM/MPPI planning.
 
@@ -253,9 +252,9 @@ overhead.
 - `TdMpc2Session` implements the planner scorer interface directly.
 - `LeWmGoalScorer` adapts `LeWmSession` plus a goal embedding to the same
   scorer interface.
-- Host score ranking is currently explicit in
-  `PlanResult::used_host_elite_selection`; replacing it with device-native
-  top-k/sort remains part of this phase.
+- CEM/iCEM elite selection uses Candle sort/gather ops on the selected device.
+  `PlanResult::used_host_elite_selection` remains as fallback telemetry and is
+  false for the built-in planners.
 - `runtime-bench --model td-mpc2` reports CEM, MPPI, and iCEM planner latency
   using the same session/scorer path as deployment code.
 

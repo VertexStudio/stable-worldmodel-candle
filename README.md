@@ -302,6 +302,17 @@ rollout or scoring, an end-to-end synthetic path, and TD-MPC2 planner latency
 for CEM, MPPI, and iCEM. Planner sections reuse a reset `TdMpc2Session`, so they
 measure the hot MPC loop after observation encoding has been cached.
 
+Latest local planner validation after device-side CEM/iCEM elite selection,
+run on 2026-05-29:
+
+- `cargo test --locked` passed.
+- `cargo check --locked --features cuda --all-targets` passed.
+- `cargo test --locked --features cuda` passed.
+- CUDA smoke completed with
+  `cargo run --locked --features cuda --bin runtime-bench -- --model td-mpc2 --device cuda --warmup 0 --iters 1 --samples 4 --horizon 2 --planner-iterations 1`.
+  This debug smoke emitted `plan_cem`, `plan_mppi`, and `plan_icem` sections;
+  use the release benchmark commands above for latency baselines.
+
 ## Runtime Sessions
 
 The library exposes initial family-specific session wrappers for repeated
@@ -338,13 +349,10 @@ let icem_action = icem.plan(&tdmpc2_session)?.first_action;
 session and goal embedding with `planner::LeWmGoalScorer`.
 
 These planners keep candidate tensors, model rollout, and scoring on the
-selected Candle device. MPPI also computes its softmax-weighted control update
-on the selected Candle device. iCEM carries elites between iterations and keeps
-a shifted warm-start sequence between `plan` calls. CEM/iCEM elite ranking is
-intentionally marked in `PlanResult::used_host_elite_selection`: Candle 0.10
-does not expose a general top-k/sort primitive, so scores are copied to the host
-for ranking and elite indices are moved back to the device for `index_select`.
-A device-native elite-selection path remains planned solver work.
+selected Candle device. CEM and iCEM use Candle sort/gather ops for elite
+selection instead of host-side ranking, and MPPI computes its softmax-weighted
+control update on the selected Candle device. iCEM carries elites between
+iterations and keeps a shifted warm-start sequence between `plan` calls.
 
 ## C ABI
 
@@ -425,7 +433,7 @@ checkpoint plus config.
 
 - Add compact fixture integration tests once small public test weights are available.
 - Add TD-MPC2 pixel fixture parity and policy rollout sampling.
-- Remove CEM/iCEM host elite ranking once Candle has a practical device-native top-k/sort path.
+- Add planner buffer reuse/preallocation for lower steady-state allocation cost.
 - Add optional safetensors export guidance for deployments that prefer mmap loading.
 - Expand the C ABI to LeWM, pixel TD-MPC2, and iCEM once those deployment paths stabilize.
 - Add additional sibling model backends starting from the simplest production inference path for each model.

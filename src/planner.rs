@@ -338,7 +338,7 @@ impl CemPlanner {
                 sample_candidates(&mean, &std, cfg.samples, &cfg.action_bounds, dtype, device)?;
             let scores = scorer.score_candidates(&candidates)?;
             validate_scores_shape(&scores, batch, cfg.samples)?;
-            let (elites, _) = select_elites(&candidates, &scores, cfg.elites)?;
+            let elites = select_elites(&candidates, &scores, cfg.elites)?;
             mean = elites.mean(1)?;
             std = enforce_min_std(&elites.var(1)?.sqrt()?, cfg.min_std)?;
 
@@ -351,8 +351,10 @@ impl CemPlanner {
             .ok_or_else(|| candle::Error::Msg("CEM did not complete any iteration".to_string()))?;
         let scores = last_scores
             .ok_or_else(|| candle::Error::Msg("CEM did not produce scores".to_string()))?;
-        let best_indices = best_indices_from_scores(&scores)?;
-        let sequence = gather_best_sequences(&candidates, &best_indices)?;
+        let sorted_indices = sorted_score_indices(&scores)?;
+        let best_index_tensor = sorted_indices.narrow(1, 0, 1)?;
+        let best_indices = best_indices_from_tensor(&best_index_tensor)?;
+        let sequence = gather_candidate_sequences(&candidates, &best_index_tensor)?.squeeze(1)?;
         let first_action = sequence.i((.., 0, ..))?;
         let elapsed = start.elapsed();
 
@@ -364,7 +366,7 @@ impl CemPlanner {
             iterations_completed,
             elapsed,
             deadline_reached,
-            used_host_elite_selection: true,
+            used_host_elite_selection: false,
         })
     }
 }
@@ -416,7 +418,9 @@ impl MppiPlanner {
 
         let scores = last_scores
             .ok_or_else(|| candle::Error::Msg("MPPI did not produce scores".to_string()))?;
-        let best_indices = best_indices_from_scores(&scores)?;
+        let sorted_indices = sorted_score_indices(&scores)?;
+        let best_index_tensor = sorted_indices.narrow(1, 0, 1)?;
+        let best_indices = best_indices_from_tensor(&best_index_tensor)?;
         let sequence = mean;
         let first_action = sequence.i((.., 0, ..))?;
         let elapsed = start.elapsed();
@@ -497,7 +501,7 @@ impl IcemPlanner {
             let scores = scorer.score_candidates(&candidates)?;
             validate_scores_shape(&scores, batch, candidate_count)?;
 
-            let (elites, _) = select_elites(&candidates, &scores, cfg.elites)?;
+            let elites = select_elites(&candidates, &scores, cfg.elites)?;
             mean = elites.mean(1)?;
             std = enforce_min_std(&elites.var(1)?.sqrt()?, cfg.min_std)?;
             carried_elites = if cfg.keep_elites == 0 {
@@ -515,8 +519,10 @@ impl IcemPlanner {
             .ok_or_else(|| candle::Error::Msg("iCEM did not complete any iteration".to_string()))?;
         let scores = last_scores
             .ok_or_else(|| candle::Error::Msg("iCEM did not produce scores".to_string()))?;
-        let best_indices = best_indices_from_scores(&scores)?;
-        let sequence = gather_best_sequences(&candidates, &best_indices)?;
+        let sorted_indices = sorted_score_indices(&scores)?;
+        let best_index_tensor = sorted_indices.narrow(1, 0, 1)?;
+        let best_indices = best_indices_from_tensor(&best_index_tensor)?;
+        let sequence = gather_candidate_sequences(&candidates, &best_index_tensor)?.squeeze(1)?;
         self.warm_start = Some(shift_sequence_for_warm_start(&sequence)?);
         let first_action = sequence.i((.., 0, ..))?;
         let elapsed = start.elapsed();
@@ -529,7 +535,7 @@ impl IcemPlanner {
             iterations_completed,
             elapsed,
             deadline_reached,
-            used_host_elite_selection: true,
+            used_host_elite_selection: false,
         })
     }
 
@@ -633,81 +639,91 @@ fn validate_scores_shape(scores: &Tensor, batch: usize, samples: usize) -> Resul
     }
 }
 
-fn select_elites(
-    candidates: &Tensor,
-    scores: &Tensor,
-    elite_count: usize,
-) -> Result<(Tensor, Vec<usize>)> {
+fn validate_scores_values(scores: &Tensor) -> Result<()> {
+    let scores = scores.to_dtype(DType::F32)?;
+    let min = scores.min_all()?.to_scalar::<f32>()?;
+    let max = scores.max_all()?.to_scalar::<f32>()?;
+    if !min.is_finite() || !max.is_finite() {
+        candle::bail!("scores contain non-finite values: min={min} max={max}");
+    }
+    Ok(())
+}
+
+fn sorted_score_indices(scores: &Tensor) -> Result<Tensor> {
+    validate_scores_values(scores)?;
+    scores.arg_sort_last_dim(true)
+}
+
+fn select_elites(candidates: &Tensor, scores: &Tensor, elite_count: usize) -> Result<Tensor> {
     let (_, samples, _, _) = candidates.dims4()?;
     if elite_count > samples {
         candle::bail!("elite_count {elite_count} cannot exceed samples {samples}");
     }
 
-    let ranked = ranked_indices_from_scores(scores)?;
-    let mut elite_tensors = Vec::with_capacity(ranked.len());
-    let mut best_indices = Vec::with_capacity(ranked.len());
-
-    for (batch_idx, order) in ranked.iter().enumerate() {
-        best_indices.push(order[0]);
-        let elite_indices = order
-            .iter()
-            .take(elite_count)
-            .map(|&idx| idx as i64)
-            .collect::<Vec<_>>();
-        let elite_indices = Tensor::from_vec(elite_indices, (elite_count,), candidates.device())?;
-        let batch_candidates = candidates.i((batch_idx, .., .., ..))?.contiguous()?;
-        elite_tensors.push(batch_candidates.index_select(&elite_indices, 0)?);
-    }
-
-    let elite_refs = elite_tensors.iter().collect::<Vec<_>>();
-    Ok((Tensor::stack(&elite_refs, 0)?, best_indices))
+    let elite_indices = sorted_score_indices(scores)?.narrow(1, 0, elite_count)?;
+    gather_candidate_sequences(candidates, &elite_indices)
 }
 
-fn gather_best_sequences(candidates: &Tensor, best_indices: &[usize]) -> Result<Tensor> {
-    let (batch, samples, _, _) = candidates.dims4()?;
-    if best_indices.len() != batch {
-        candle::bail!(
-            "best index count {} does not match candidate batch {batch}",
-            best_indices.len()
-        );
-    }
-
-    let mut sequences = Vec::with_capacity(batch);
-    for (batch_idx, &best_idx) in best_indices.iter().enumerate() {
-        if best_idx >= samples {
-            candle::bail!("best index {best_idx} out of range for {samples} samples");
+fn gather_candidate_sequences(candidates: &Tensor, indices: &Tensor) -> Result<Tensor> {
+    let (batch, _, horizon, action_dim) = candidates.dims4()?;
+    let selected = match indices.dims() {
+        [b, selected] if *b == batch => *selected,
+        other => {
+            candle::bail!("candidate indices must have shape [{batch}, selected], got {other:?}")
         }
-        sequences.push(candidates.i((batch_idx, best_idx, .., ..))?);
-    }
+    };
 
-    let sequence_refs = sequences.iter().collect::<Vec<_>>();
-    Tensor::stack(&sequence_refs, 0)
+    let gather_indices = indices
+        .reshape((batch, selected, 1, 1))?
+        .broadcast_as((batch, selected, horizon, action_dim))?
+        .contiguous()?;
+    candidates.contiguous()?.gather(&gather_indices, 1)
 }
 
-fn best_indices_from_scores(scores: &Tensor) -> Result<Vec<usize>> {
-    ranked_indices_from_scores(scores)
-        .map(|ranked| ranked.into_iter().map(|order| order[0]).collect::<Vec<_>>())
-}
-
-fn ranked_indices_from_scores(scores: &Tensor) -> Result<Vec<Vec<usize>>> {
-    let rows = scores.to_vec2::<f32>()?;
-    let mut ranked = Vec::with_capacity(rows.len());
-
+fn best_indices_from_tensor(indices: &Tensor) -> Result<Vec<usize>> {
+    let rows = indices.to_vec2::<u32>()?;
+    let mut best_indices = Vec::with_capacity(rows.len());
     for (batch_idx, row) in rows.iter().enumerate() {
-        if row.is_empty() {
-            candle::bail!("score row {batch_idx} is empty");
-        }
-        for (sample_idx, &value) in row.iter().enumerate() {
-            if !value.is_finite() {
-                candle::bail!(
-                    "score at batch {batch_idx} sample {sample_idx} is not finite: {value}"
-                );
-            }
-        }
-        let mut order = (0..row.len()).collect::<Vec<_>>();
-        order.sort_by(|&left, &right| row[left].total_cmp(&row[right]));
-        ranked.push(order);
+        let Some(&best_idx) = row.first() else {
+            candle::bail!("best index row {batch_idx} is empty");
+        };
+        best_indices.push(best_idx as usize);
+    }
+    Ok(best_indices)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_elites_uses_device_sort_and_gather_per_batch() -> Result<()> {
+        let device = Device::Cpu;
+        let candidates = Tensor::arange(0f32, 8f32, &device)?.reshape((2, 4, 1, 1))?;
+        let scores = Tensor::new(&[[3f32, 1., 4., 0.5], [9., -1., 2., -2.]], &device)?;
+
+        let elites = select_elites(&candidates, &scores, 2)?;
+        assert_eq!(
+            elites.reshape((2, 2))?.to_vec2::<f32>()?,
+            &[[3., 1.], [7., 5.]]
+        );
+
+        let sorted_indices = sorted_score_indices(&scores)?;
+        let best_indices = sorted_indices.narrow(1, 0, 1)?;
+        let sequences = gather_candidate_sequences(&candidates, &best_indices)?.squeeze(1)?;
+
+        assert_eq!(best_indices_from_tensor(&best_indices)?, &[3, 3]);
+        assert_eq!(sequences.reshape((2,))?.to_vec1::<f32>()?, &[3., 7.]);
+        Ok(())
     }
 
-    Ok(ranked)
+    #[test]
+    fn sorted_score_indices_rejects_non_finite_scores() -> Result<()> {
+        let device = Device::Cpu;
+        let scores = Tensor::new(&[[0f32, f32::INFINITY]], &device)?;
+        let err = sorted_score_indices(&scores).unwrap_err();
+
+        assert!(err.to_string().contains("non-finite"));
+        Ok(())
+    }
 }
