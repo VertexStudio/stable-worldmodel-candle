@@ -17,9 +17,11 @@ candle-transformers = { path = "../candle/candle-transformers" }
 
 accelerate-src = { version = "0.3.2", optional = true }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"], optional = true }
+hf-hub = { version = "0.5.0", default-features = false, features = ["ureq"], optional = true }
 
 [features]
 default = []
+hub = ["dep:hf-hub"]
 accelerate = [
     "dep:accelerate-src",
     "candle/accelerate",
@@ -47,3 +49,7 @@ path = "src/bin/lewm-inspect.rs"
 [[bin]]
 name = "tdmpc2-inspect"
 path = "src/bin/tdmpc2-inspect.rs"
+
+[[bin]]
+name = "lewm-compare-fixture"
+path = "src/bin/lewm-compare-fixture.rs"

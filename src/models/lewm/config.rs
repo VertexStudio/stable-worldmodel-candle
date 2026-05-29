@@ -1,3 +1,6 @@
+use std::path::Path;
+
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -124,5 +127,150 @@ impl LeWmConfig {
             pred_proj: MlpConfig::projector(embed_dim),
             history_size,
         }
+    }
+
+    pub fn from_stable_worldmodel_json_file(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let path = path.as_ref();
+        let json = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        Self::from_stable_worldmodel_json_str(&json)
+            .with_context(|| format!("failed to parse {}", path.display()))
+    }
+
+    pub fn from_stable_worldmodel_json_str(json: &str) -> anyhow::Result<Self> {
+        let stable: StableLeWmConfig = serde_json::from_str(json)?;
+        stable.try_into()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct StableLeWmConfig {
+    encoder: StableVitEncoderConfig,
+    predictor: StablePredictorConfig,
+    action_encoder: StableActionEmbedderConfig,
+    projector: StableMlpConfig,
+    pred_proj: StableMlpConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct StableVitEncoderConfig {
+    size: String,
+    patch_size: usize,
+    image_size: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct StablePredictorConfig {
+    num_frames: usize,
+    input_dim: usize,
+    hidden_dim: usize,
+    output_dim: Option<usize>,
+    depth: usize,
+    heads: usize,
+    mlp_dim: usize,
+    dim_head: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct StableActionEmbedderConfig {
+    input_dim: usize,
+    smoothed_dim: Option<usize>,
+    emb_dim: usize,
+    mlp_scale: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StableMlpConfig {
+    input_dim: usize,
+    hidden_dim: usize,
+    output_dim: Option<usize>,
+    norm_fn: Option<StableTarget>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StableTarget {
+    #[serde(rename = "_target_")]
+    target: String,
+}
+
+impl TryFrom<StableLeWmConfig> for LeWmConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(stable: StableLeWmConfig) -> anyhow::Result<Self> {
+        let encoder = stable.encoder.try_into()?;
+        let predictor: PredictorConfig = stable.predictor.into();
+        let history_size = predictor.num_frames;
+        Ok(Self {
+            encoder,
+            predictor,
+            action_encoder: stable.action_encoder.into(),
+            projector: stable.projector.try_into()?,
+            pred_proj: stable.pred_proj.try_into()?,
+            history_size,
+        })
+    }
+}
+
+impl TryFrom<StableVitEncoderConfig> for VitEncoderConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(stable: StableVitEncoderConfig) -> anyhow::Result<Self> {
+        if stable.size != "tiny" {
+            anyhow::bail!("only LeWM ViT tiny is supported, got {}", stable.size);
+        }
+        let mut cfg = Self::tiny_patch14_224();
+        cfg.patch_size = stable.patch_size;
+        cfg.image_size = stable.image_size;
+        Ok(cfg)
+    }
+}
+
+impl From<StablePredictorConfig> for PredictorConfig {
+    fn from(stable: StablePredictorConfig) -> Self {
+        Self {
+            num_frames: stable.num_frames,
+            input_dim: stable.input_dim,
+            hidden_dim: stable.hidden_dim,
+            output_dim: stable.output_dim.unwrap_or(stable.input_dim),
+            depth: stable.depth,
+            heads: stable.heads,
+            dim_head: stable.dim_head,
+            mlp_dim: stable.mlp_dim,
+        }
+    }
+}
+
+impl From<StableActionEmbedderConfig> for ActionEmbedderConfig {
+    fn from(stable: StableActionEmbedderConfig) -> Self {
+        Self {
+            input_dim: stable.input_dim,
+            smoothed_dim: stable.smoothed_dim.unwrap_or(stable.input_dim),
+            emb_dim: stable.emb_dim,
+            mlp_scale: stable.mlp_scale.unwrap_or(4),
+        }
+    }
+}
+
+impl TryFrom<StableMlpConfig> for MlpConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(stable: StableMlpConfig) -> anyhow::Result<Self> {
+        Ok(Self {
+            input_dim: stable.input_dim,
+            hidden_dim: stable.hidden_dim,
+            output_dim: stable.output_dim.unwrap_or(stable.input_dim),
+            norm: parse_norm_kind(stable.norm_fn.as_ref())?,
+        })
+    }
+}
+
+fn parse_norm_kind(norm: Option<&StableTarget>) -> anyhow::Result<NormKind> {
+    let Some(norm) = norm else {
+        return Ok(NormKind::None);
+    };
+    match norm.target.as_str() {
+        "torch.nn.BatchNorm1d" => Ok(NormKind::BatchNorm1d),
+        "torch.nn.LayerNorm" => Ok(NormKind::LayerNorm),
+        other => anyhow::bail!("unsupported LeWM MLP norm_fn target {other}"),
     }
 }

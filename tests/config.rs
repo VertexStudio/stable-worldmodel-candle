@@ -37,6 +37,68 @@ fn config_round_trips_through_json() {
 }
 
 #[test]
+fn parses_stable_worldmodel_lewm_config_json() {
+    let json = r#"{
+      "_target_": "stable_worldmodel.wm.lewm.LeWM",
+      "encoder": {
+        "_target_": "stable_pretraining.backbone.utils.vit_hf",
+        "size": "tiny",
+        "patch_size": 14,
+        "image_size": 224,
+        "pretrained": false,
+        "use_mask_token": false
+      },
+      "predictor": {
+        "_target_": "stable_worldmodel.wm.lewm.module.Predictor",
+        "num_frames": 3,
+        "input_dim": 192,
+        "hidden_dim": 192,
+        "output_dim": 192,
+        "depth": 6,
+        "heads": 16,
+        "mlp_dim": 2048,
+        "dim_head": 64,
+        "dropout": 0.1,
+        "emb_dropout": 0.0
+      },
+      "action_encoder": {
+        "_target_": "stable_worldmodel.wm.lewm.module.Embedder",
+        "input_dim": 10,
+        "emb_dim": 192
+      },
+      "projector": {
+        "_target_": "stable_worldmodel.wm.lewm.module.MLP",
+        "input_dim": 192,
+        "output_dim": 192,
+        "hidden_dim": 2048,
+        "norm_fn": {
+          "_target_": "torch.nn.BatchNorm1d",
+          "_partial_": true
+        }
+      },
+      "pred_proj": {
+        "_target_": "stable_worldmodel.wm.lewm.module.MLP",
+        "input_dim": 192,
+        "output_dim": 192,
+        "hidden_dim": 2048,
+        "norm_fn": {
+          "_target_": "torch.nn.BatchNorm1d",
+          "_partial_": true
+        }
+      }
+    }"#;
+
+    let cfg = LeWmConfig::from_stable_worldmodel_json_str(json).unwrap();
+
+    assert_eq!(cfg.action_encoder.input_dim, 10);
+    assert_eq!(cfg.action_encoder.smoothed_dim, 10);
+    assert_eq!(cfg.history_size, 3);
+    assert_eq!(cfg.predictor.output_dim, 192);
+    assert_eq!(cfg.projector.norm, NormKind::BatchNorm1d);
+    assert_eq!(cfg.pred_proj.norm, NormKind::BatchNorm1d);
+}
+
+#[test]
 fn top_level_model_config_is_not_lewm_specific() {
     let cfg = ModelConfig::lewm_tiny_patch14_224(2);
 
