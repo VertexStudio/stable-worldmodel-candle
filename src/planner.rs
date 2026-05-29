@@ -216,6 +216,76 @@ impl MppiConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct IcemConfig {
+    pub horizon: usize,
+    pub samples: usize,
+    pub elites: usize,
+    pub keep_elites: usize,
+    pub iterations: usize,
+    pub action_dim: usize,
+    pub action_bounds: ActionBounds,
+    pub init_std: f32,
+    pub min_std: f32,
+    pub deadline: Option<Duration>,
+}
+
+impl IcemConfig {
+    pub fn new(horizon: usize, samples: usize, elites: usize, action_dim: usize) -> Self {
+        Self {
+            horizon,
+            samples,
+            elites,
+            keep_elites: elites,
+            iterations: 4,
+            action_dim,
+            action_bounds: ActionBounds::symmetric(action_dim, 1.0),
+            init_std: 1.0,
+            min_std: 1e-3,
+            deadline: None,
+        }
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.horizon == 0 {
+            candle::bail!("iCEM horizon must be greater than zero");
+        }
+        if self.samples == 0 {
+            candle::bail!("iCEM samples must be greater than zero");
+        }
+        if self.elites < 2 {
+            candle::bail!("iCEM elites must be at least two");
+        }
+        if self.elites > self.samples {
+            candle::bail!(
+                "iCEM elites {} cannot exceed samples {} on the first iteration",
+                self.elites,
+                self.samples
+            );
+        }
+        if self.keep_elites > self.elites {
+            candle::bail!(
+                "iCEM keep_elites {} cannot exceed elites {}",
+                self.keep_elites,
+                self.elites
+            );
+        }
+        if self.iterations == 0 {
+            candle::bail!("iCEM iterations must be greater than zero");
+        }
+        if self.action_dim == 0 {
+            candle::bail!("iCEM action_dim must be greater than zero");
+        }
+        if !self.init_std.is_finite() || self.init_std <= 0.0 {
+            candle::bail!("iCEM init_std must be finite and greater than zero");
+        }
+        if !self.min_std.is_finite() || self.min_std < 0.0 {
+            candle::bail!("iCEM min_std must be finite and non-negative");
+        }
+        self.action_bounds.validate(self.action_dim)
+    }
+}
+
 #[derive(Debug)]
 pub struct PlanResult {
     pub first_action: Tensor,
@@ -364,6 +434,122 @@ impl MppiPlanner {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct IcemPlanner {
+    config: IcemConfig,
+    warm_start: Option<Tensor>,
+}
+
+impl IcemPlanner {
+    pub fn new(config: IcemConfig) -> Self {
+        Self {
+            config,
+            warm_start: None,
+        }
+    }
+
+    pub fn config(&self) -> &IcemConfig {
+        &self.config
+    }
+
+    pub fn warm_start_sequence(&self) -> Option<&Tensor> {
+        self.warm_start.as_ref()
+    }
+
+    pub fn clear_warm_start(&mut self) {
+        self.warm_start = None;
+    }
+
+    pub fn set_warm_start_sequence(&mut self, sequence: Tensor) {
+        self.warm_start = Some(sequence);
+    }
+
+    pub fn plan<S: CandidateScorer>(&mut self, scorer: &S) -> Result<PlanResult> {
+        self.config.validate()?;
+        let start = Instant::now();
+        let device = scorer.device();
+        let dtype = scorer.dtype();
+        let cfg = &self.config;
+        let batch = scorer.batch_size().unwrap_or(1);
+
+        let mut mean = self.initial_mean(batch, dtype, device)?;
+        let mut std = Tensor::ones((batch, cfg.horizon, cfg.action_dim), dtype, device)?
+            .affine(cfg.init_std as f64, 0.0)?;
+        let mut carried_elites = None;
+        let mut last_candidates = None;
+        let mut last_scores = None;
+        let mut iterations_completed = 0;
+        let mut deadline_reached = false;
+
+        for iter_idx in 0..cfg.iterations {
+            if iter_idx > 0 && deadline_elapsed(start, cfg.deadline) {
+                deadline_reached = true;
+                break;
+            }
+
+            let sampled =
+                sample_candidates(&mean, &std, cfg.samples, &cfg.action_bounds, dtype, device)?;
+            let candidates = match carried_elites.as_ref() {
+                Some(elites) => Tensor::cat(&[&sampled, elites], 1)?,
+                None => sampled,
+            };
+            let candidate_count = candidates.dim(1)?;
+            let scores = scorer.score_candidates(&candidates)?;
+            validate_scores_shape(&scores, batch, candidate_count)?;
+
+            let (elites, _) = select_elites(&candidates, &scores, cfg.elites)?;
+            mean = elites.mean(1)?;
+            std = enforce_min_std(&elites.var(1)?.sqrt()?, cfg.min_std)?;
+            carried_elites = if cfg.keep_elites == 0 {
+                None
+            } else {
+                Some(elites.narrow(1, 0, cfg.keep_elites)?)
+            };
+
+            last_candidates = Some(candidates);
+            last_scores = Some(scores);
+            iterations_completed += 1;
+        }
+
+        let candidates = last_candidates
+            .ok_or_else(|| candle::Error::Msg("iCEM did not complete any iteration".to_string()))?;
+        let scores = last_scores
+            .ok_or_else(|| candle::Error::Msg("iCEM did not produce scores".to_string()))?;
+        let best_indices = best_indices_from_scores(&scores)?;
+        let sequence = gather_best_sequences(&candidates, &best_indices)?;
+        self.warm_start = Some(shift_sequence_for_warm_start(&sequence)?);
+        let first_action = sequence.i((.., 0, ..))?;
+        let elapsed = start.elapsed();
+
+        Ok(PlanResult {
+            first_action,
+            sequence,
+            scores,
+            best_indices,
+            iterations_completed,
+            elapsed,
+            deadline_reached,
+            used_host_elite_selection: true,
+        })
+    }
+
+    fn initial_mean(&self, batch: usize, dtype: DType, device: &Device) -> Result<Tensor> {
+        let cfg = &self.config;
+        let shape = (batch, cfg.horizon, cfg.action_dim);
+        match self.warm_start.as_ref() {
+            Some(sequence) if sequence.dims() == [batch, cfg.horizon, cfg.action_dim] => {
+                sequence.to_device(device)?.to_dtype(dtype)?.reshape(shape)
+            }
+            Some(sequence) => candle::bail!(
+                "iCEM warm-start shape {:?} does not match expected {:?}",
+                sequence.dims(),
+                [batch, cfg.horizon, cfg.action_dim]
+            ),
+            None => Tensor::zeros(shape, dtype, device),
+        }
+    }
+}
+
 fn deadline_elapsed(start: Instant, deadline: Option<Duration>) -> bool {
     deadline.is_some_and(|deadline| start.elapsed() >= deadline)
 }
@@ -400,6 +586,16 @@ fn mppi_weighted_sequence(
         .reshape((batch, samples, 1, 1))?
         .broadcast_as((batch, samples, horizon, action_dim))?;
     candidates.broadcast_mul(&weights)?.sum(1)
+}
+
+fn shift_sequence_for_warm_start(sequence: &Tensor) -> Result<Tensor> {
+    let (_, horizon, _) = sequence.dims3()?;
+    if horizon == 1 {
+        return Ok(sequence.clone());
+    }
+    let tail = sequence.narrow(1, 1, horizon - 1)?;
+    let last = sequence.narrow(1, horizon - 1, 1)?;
+    Tensor::cat(&[&tail, &last], 1)
 }
 
 fn clamp_actions(
@@ -459,7 +655,7 @@ fn select_elites(
             .map(|&idx| idx as i64)
             .collect::<Vec<_>>();
         let elite_indices = Tensor::from_vec(elite_indices, (elite_count,), candidates.device())?;
-        let batch_candidates = candidates.i((batch_idx, .., .., ..))?;
+        let batch_candidates = candidates.i((batch_idx, .., .., ..))?.contiguous()?;
         elite_tensors.push(batch_candidates.index_select(&elite_indices, 0)?);
     }
 

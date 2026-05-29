@@ -44,6 +44,8 @@ predictable and deployment practical.
   top-k/sort primitive.
 - MPPI exists and keeps its softmax-weighted control update in Candle tensors
   on the selected device.
+- iCEM exists with elite carryover between iterations and a shifted warm-start
+  sequence between `plan` calls.
 - Deployment interfaces are currently the Rust library plus CLI tools. A C ABI
   is still pending.
 
@@ -236,6 +238,7 @@ overhead.
 
 - CEM is implemented through `planner::CemPlanner`.
 - MPPI is implemented through `planner::MppiPlanner`.
+- iCEM is implemented through `planner::IcemPlanner`.
 - `TdMpc2Session` implements the planner scorer interface directly.
 - `LeWmGoalScorer` adapts `LeWmSession` plus a goal embedding to the same
   scorer interface.

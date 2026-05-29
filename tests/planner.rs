@@ -3,7 +3,9 @@ use candle_nn::VarBuilder;
 use stable_worldmodel_candle::{
     checkpoint,
     models::tdmpc2::{TdMpc2, TdMpc2Config},
-    planner::{ActionBounds, CemConfig, CemPlanner, MppiConfig, MppiPlanner},
+    planner::{
+        ActionBounds, CemConfig, CemPlanner, IcemConfig, IcemPlanner, MppiConfig, MppiPlanner,
+    },
     session::TdMpc2Session,
 };
 
@@ -104,6 +106,55 @@ fn mppi_plans_tdmpc2_action_sequence() -> anyhow::Result<()> {
     for row in result.scores.to_vec2::<f32>()? {
         for value in row {
             assert!(value.is_finite());
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn icem_keeps_shifted_warm_start_between_plans() -> anyhow::Result<()> {
+    let device = Device::Cpu;
+    let dtype = DType::F32;
+    let state_dim = 12;
+    let action_dim = 4;
+    let model = TdMpc2::new(
+        TdMpc2Config::state_only(state_dim, action_dim),
+        empty_vb(dtype, &device),
+    )?;
+    let mut session = TdMpc2Session::new(model, device.clone(), dtype);
+
+    let batch = 2;
+    let state = Tensor::randn(0f32, 1f32, (batch, state_dim), &device)?;
+    session.reset_state(&state)?;
+
+    let mut icem_cfg = IcemConfig::new(3, 8, 3, action_dim);
+    icem_cfg.keep_elites = 2;
+    icem_cfg.iterations = 2;
+    icem_cfg.init_std = 0.5;
+    icem_cfg.action_bounds = ActionBounds::symmetric(action_dim, 0.75);
+
+    let mut planner = IcemPlanner::new(icem_cfg);
+    let first = planner.plan(&session)?;
+    let warm_start = planner
+        .warm_start_sequence()
+        .expect("iCEM should retain a warm-start sequence")
+        .clone();
+    let second = planner.plan(&session)?;
+
+    assert_eq!(first.first_action.dims(), &[batch, action_dim]);
+    assert_eq!(first.sequence.dims(), &[batch, 3, action_dim]);
+    assert_eq!(first.scores.dims(), &[batch, 10]);
+    assert_eq!(first.best_indices.len(), batch);
+    assert_eq!(first.iterations_completed, 2);
+    assert!(first.used_host_elite_selection);
+    assert_eq!(warm_start.dims(), &[batch, 3, action_dim]);
+    assert_eq!(second.first_action.dims(), &[batch, action_dim]);
+    assert!(planner.warm_start_sequence().is_some());
+
+    for action in first.first_action.to_vec2::<f32>()? {
+        for value in action {
+            assert!((-0.75..=0.75).contains(&value));
         }
     }
 
