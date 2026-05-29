@@ -3,6 +3,7 @@
 pub mod artifact;
 pub mod checkpoint;
 pub mod config;
+pub mod ffi;
 #[cfg(feature = "hub")]
 pub mod hub;
 pub mod models;

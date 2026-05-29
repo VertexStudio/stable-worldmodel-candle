@@ -46,8 +46,8 @@ predictable and deployment practical.
   on the selected device.
 - iCEM exists with elite carryover between iterations and a shifted warm-start
   sequence between `plan` calls.
-- Deployment interfaces are currently the Rust library plus CLI tools. A C ABI
-  is still pending.
+- Deployment interfaces are currently the Rust library, CLI tools, and an
+  initial C ABI for TD-MPC2 state/vector CEM/MPPI planning.
 
 ## Phase 1: Baseline Parity And Benchmarks
 
@@ -312,6 +312,14 @@ Expose the stable runtime without forcing a Python service.
 - Keep the Rust API as the primary interface.
 - Add C ABI after the Rust session and planner APIs stabilize.
 - Defer ROS2, gRPC, and WASM to future integration work.
+
+**Status**
+
+- The crate builds both `rlib` and `cdylib`.
+- `ffi` exposes TD-MPC2 state/vector artifact loading, state reset, dimension
+  accessors, CEM planning, MPPI planning, handle cleanup, and thread-local
+  error reporting.
+- LeWM, pixel TD-MPC2, and iCEM C ABI entrypoints are still pending.
 
 **Done When**
 

@@ -41,6 +41,7 @@ mkl = [
 [lib]
 name = "stable_worldmodel_candle"
 path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "lewm-inspect"

@@ -297,6 +297,35 @@ does not expose a general top-k/sort primitive, so scores are copied to the host
 for ranking and elite indices are moved back to the device for `index_select`.
 A device-native elite-selection path remains planned solver work.
 
+## C ABI
+
+The crate also builds a `cdylib` for C callers:
+
+```bash
+cargo build --release
+cargo build --release --features cuda
+```
+
+The initial ABI is intentionally narrow and matches the parity-covered runtime
+path: TD-MPC2 state/vector artifacts with CEM or MPPI planning. C callers load a
+deployment artifact, reset the current state batch, and request an action:
+
+```c
+#include "stable_worldmodel_candle.h"
+
+SwmTdMpc2 *rt = NULL;
+SwmStatus status = swm_tdmpc2_load("/path/to/artifact", "cuda:0", "f32", &rt);
+status = swm_tdmpc2_reset_state(rt, state_f32, batch, state_dim);
+status = swm_tdmpc2_plan_cem(rt, cem_cfg, action_out, sequence_out, best_cost_out);
+swm_tdmpc2_free(rt);
+```
+
+`swm_last_error_message()` returns a thread-local error string after non-OK
+statuses. The matching declarations live in
+`include/stable_worldmodel_candle.h`. The LeWM, pixel TD-MPC2, and iCEM C ABI
+surfaces remain future work; the Rust API already exposes those
+planner/session pieces where implemented.
+
 ## Source Layout
 
 ```text
@@ -307,6 +336,7 @@ src/
 │   ├── mod.rs
 │   └── lewm/            # LeWM backend
 │   └── tdmpc2/          # state/vector TD-MPC2 backend
+├── ffi.rs               # C ABI entrypoints
 ├── planner.rs           # Rust planning solvers
 └── bin/
     └── lewm-inspect.rs  # LeWM smoke-test CLI
@@ -348,4 +378,5 @@ checkpoint plus config.
 - Add TD-MPC2 pixel CNN support and policy rollout sampling.
 - Remove CEM/iCEM host elite ranking once Candle has a practical device-native top-k/sort path.
 - Add optional safetensors export guidance for deployments that prefer mmap loading.
+- Expand the C ABI to LeWM, pixel TD-MPC2, and iCEM once those deployment paths stabilize.
 - Add additional sibling model backends starting from the simplest production inference path for each model.
