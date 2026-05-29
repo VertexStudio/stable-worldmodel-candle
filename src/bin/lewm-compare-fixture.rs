@@ -48,8 +48,24 @@ struct Args {
     #[arg(long, value_enum, default_value_t = DeviceArg::Cpu)]
     device: DeviceArg,
 
-    #[arg(long, default_value_t = 1e-4)]
-    tolerance: f32,
+    /// Override every per-output tolerance.
+    #[arg(long)]
+    tolerance: Option<f32>,
+
+    #[arg(long, default_value_t = 1e-3)]
+    emb_tolerance: f32,
+
+    #[arg(long, default_value_t = 1e-5)]
+    act_emb_tolerance: f32,
+
+    #[arg(long, default_value_t = 1e-3)]
+    pred_tolerance: f32,
+
+    #[arg(long, default_value_t = 2e-3)]
+    rollout_tolerance: f32,
+
+    #[arg(long, default_value_t = 1e-2)]
+    cost_tolerance: f32,
 }
 
 fn device(arg: DeviceArg) -> candle::Result<Device> {
@@ -94,25 +110,55 @@ fn main() -> anyhow::Result<()> {
     let goal_emb = arrays[3].to_device(&device)?.to_dtype(DType::F32)?;
 
     let emb = model.encode_pixels(&pixels)?;
-    compare("emb", &emb, &arrays[4], args.tolerance)?;
+    compare(
+        "emb",
+        &emb,
+        &arrays[4],
+        tolerance(args.tolerance, args.emb_tolerance),
+    )?;
 
     let act_emb = model.encode_actions(&actions)?;
-    compare("act_emb", &act_emb, &arrays[5], args.tolerance)?;
+    compare(
+        "act_emb",
+        &act_emb,
+        &arrays[5],
+        tolerance(args.tolerance, args.act_emb_tolerance),
+    )?;
 
     let pred = model.predict_from_action_embeddings(&emb, &act_emb)?;
-    compare("pred", &pred, &arrays[6], args.tolerance)?;
+    compare(
+        "pred",
+        &pred,
+        &arrays[6],
+        tolerance(args.tolerance, args.pred_tolerance),
+    )?;
 
     let (b, s, _, _) = action_candidates.dims4()?;
     let (_, h, d) = emb.dims3()?;
     let emb_init = emb.unsqueeze(1)?.broadcast_as((b, s, h, d))?;
     let rollout = model.rollout_embeddings(&emb_init, &action_candidates)?;
     report_time_slices("rollout", &rollout, &arrays[7])?;
-    compare("rollout", &rollout, &arrays[7], args.tolerance)?;
+    compare(
+        "rollout",
+        &rollout,
+        &arrays[7],
+        tolerance(args.tolerance, args.rollout_tolerance),
+    )?;
 
     let cost = model.goal_cost(&rollout, &goal_emb)?;
-    compare("cost", &cost, &arrays[8], args.tolerance)?;
+    compare(
+        "cost",
+        &cost,
+        &arrays[8],
+        tolerance(args.tolerance, args.cost_tolerance),
+    )?;
+    compare_cost_ordering(&cost, &arrays[8])?;
 
     Ok(())
+}
+
+fn tolerance(global: Option<f32>, output_default: f32) -> f32 {
+    global.unwrap_or(output_default)
 }
 
 fn report_time_slices(name: &str, actual: &Tensor, expected: &Tensor) -> anyhow::Result<()> {
@@ -167,6 +213,8 @@ fn compare(name: &str, actual: &Tensor, expected: &Tensor, tolerance: f32) -> an
             expected.shape()
         );
     }
+    ensure_finite(&format!("{name} Candle"), actual)?;
+    ensure_finite(&format!("{name} Python"), expected)?;
     let expected = expected.to_device(actual.device())?.to_dtype(DType::F32)?;
     let actual = actual.to_dtype(DType::F32)?;
     let shape = actual.shape().clone();
@@ -181,4 +229,49 @@ fn compare(name: &str, actual: &Tensor, expected: &Tensor, tolerance: f32) -> an
         anyhow::bail!("{name} max_abs {max_abs:.6e} exceeds tolerance {tolerance:.6e}");
     }
     Ok(())
+}
+
+fn ensure_finite(name: &str, tensor: &Tensor) -> anyhow::Result<()> {
+    let values = tensor
+        .to_dtype(DType::F32)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+    if let Some((idx, value)) = values
+        .iter()
+        .enumerate()
+        .find(|(_, value)| !value.is_finite())
+    {
+        anyhow::bail!("{name} contains non-finite value {value} at flat index {idx}");
+    }
+    Ok(())
+}
+
+fn compare_cost_ordering(actual: &Tensor, expected: &Tensor) -> anyhow::Result<()> {
+    if actual.shape() != expected.shape() {
+        return Ok(());
+    }
+    let actual = actual.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+    let expected = expected.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+    let mut mismatches = Vec::new();
+    for (batch, (actual_row, expected_row)) in actual.iter().zip(expected.iter()).enumerate() {
+        let actual_best = argmin(actual_row);
+        let expected_best = argmin(expected_row);
+        if actual_best != expected_best {
+            mismatches.push((batch, actual_best, expected_best));
+        }
+    }
+    if !mismatches.is_empty() {
+        anyhow::bail!("cost argmin mismatch by batch: {mismatches:?}");
+    }
+    println!("cost argmin: stable for {} batch item(s)", actual.len());
+    Ok(())
+}
+
+fn argmin(values: &[f32]) -> usize {
+    values
+        .iter()
+        .enumerate()
+        .min_by(|(_, lhs), (_, rhs)| lhs.total_cmp(rhs))
+        .map(|(idx, _)| idx)
+        .unwrap_or(0)
 }

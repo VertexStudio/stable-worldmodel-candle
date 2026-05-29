@@ -31,6 +31,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--horizon", type=int, default=5)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument(
+        "--device",
+        choices=("cpu", "cuda"),
+        default="cpu",
+        help="backend used for model inference; inputs are generated on CPU and copied to this device",
+    )
     return parser.parse_args()
 
 
@@ -46,9 +52,20 @@ def main() -> None:
     from stable_worldmodel.wm.utils import load_pretrained
 
     torch.set_num_threads(1)
+    torch.set_grad_enabled(False)
     torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
-    model = load_pretrained(args.model, cache_dir=args.cache_dir).eval()
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cudnn.benchmark = False
+
+    if args.device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("--device cuda requested, but torch.cuda.is_available() is false")
+    device = torch.device(args.device)
+
+    model = load_pretrained(args.model, cache_dir=args.cache_dir).to(device).eval()
     action_dim = model.action_encoder.input_dim
     history = model.predictor.num_frames
     if args.horizon < history:
@@ -74,7 +91,13 @@ def main() -> None:
             dtype=torch.float32,
         ).clamp(-1.0, 1.0)
 
-        encoded = model.encode({"pixels": pixels.clone(), "action": actions.clone()})
+        pixels_device = pixels.to(device)
+        actions_device = actions.to(device)
+        action_candidates_device = action_candidates.to(device)
+
+        encoded = model.encode(
+            {"pixels": pixels_device.clone(), "action": actions_device.clone()}
+        )
         emb = encoded["emb"].contiguous()
         act_emb = encoded["act_emb"].contiguous()
         pred = model.predict(emb, act_emb).contiguous()
@@ -85,7 +108,7 @@ def main() -> None:
             .contiguous()
         )
         rollout_info = {
-            "pixels": pixels.unsqueeze(1)
+            "pixels": pixels_device.unsqueeze(1)
             .expand(
                 args.batch_size,
                 args.samples,
@@ -98,7 +121,7 @@ def main() -> None:
             "emb": emb_init,
         }
         rollout = model.rollout(
-            rollout_info, action_candidates, history_size=history
+            rollout_info, action_candidates_device, history_size=history
         )["predicted_emb"].contiguous()
 
         goal_emb = emb[:, -1].contiguous()
@@ -122,6 +145,11 @@ def main() -> None:
 
     print(f"fixture={args.output}")
     print(f"model={args.model}")
+    print(f"device={device}")
+    print(f"torch={torch.__version__}")
+    print(f"torch_cuda={torch.version.cuda}")
+    if device.type == "cuda":
+        print(f"cuda_device={torch.cuda.get_device_name(device)}")
     print(f"batch_size={args.batch_size}")
     print(f"samples={args.samples}")
     print(f"history={history}")

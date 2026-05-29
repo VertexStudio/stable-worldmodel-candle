@@ -52,6 +52,6 @@ impl HfVitEncoder {
     }
 
     pub fn cls(&self, pixels: &Tensor) -> Result<Tensor> {
-        self.forward(pixels)?.i((.., 0, ..))
+        self.forward(pixels)?.i((.., 0, ..))?.contiguous()
     }
 }

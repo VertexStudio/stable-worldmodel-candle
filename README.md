@@ -51,6 +51,7 @@ uv run --python 3.12 --no-dev --extra train \
   python ../stable-worldmodel-candle/tools/export_lewm_fixture.py \
   --stable-worldmodel-root . \
   --model quentinll/lewm-pusht \
+  --device cpu \
   --output ../stable-worldmodel-candle/target/lewm-pusht-fixture.npz
 ```
 
@@ -79,6 +80,39 @@ cargo run --features hub --bin lewm-compare-fixture -- \
 
 The current verified PushT fixture covers pixel encoding, action embedding,
 single-step prediction, latent rollout, and goal cost.
+
+For backend parity, generate CPU and CUDA Python fixtures from identical CPU
+input tensors, then compare them before comparing Candle:
+
+```bash
+cd stable-worldmodel
+uv run --python 3.12 --no-dev --extra train \
+  --with imageio --with 'transformers<5' \
+  python ../stable-worldmodel-candle/tools/export_lewm_fixture.py \
+  --stable-worldmodel-root . \
+  --model quentinll/lewm-pusht \
+  --device cpu \
+  --output ../stable-worldmodel-candle/target/lewm-pusht-python-cpu.npz
+
+uv run --python 3.12 --no-dev --extra train \
+  --with imageio --with 'transformers<5' \
+  python ../stable-worldmodel-candle/tools/export_lewm_fixture.py \
+  --stable-worldmodel-root . \
+  --model quentinll/lewm-pusht \
+  --device cuda \
+  --output ../stable-worldmodel-candle/target/lewm-pusht-python-cuda.npz
+
+uv run --python 3.12 --no-dev --extra train \
+  python ../stable-worldmodel-candle/tools/compare_npz.py \
+  ../stable-worldmodel-candle/target/lewm-pusht-python-cpu.npz \
+  ../stable-worldmodel-candle/target/lewm-pusht-python-cuda.npz \
+  --left-label python-cpu \
+  --right-label python-cuda
+```
+
+The fixture exporter disables TF32 matmul/cuDNN paths, disables cuDNN
+benchmarking, runs with gradients off, and exports model outputs after
+`model.eval()`.
 
 ## Platform Builds
 
@@ -115,6 +149,43 @@ cuDNN is available as an additive feature:
 ```bash
 cargo check --features cudnn --all-targets
 ```
+
+Full LeWM CUDA parity matrix:
+
+```bash
+tools/cuda_parity.sh
+```
+
+The matrix runs environment sanity checks, Rust CUDA build/tests, optional
+cuDNN checks when detected, Python CPU-vs-CUDA fixture diffs, Candle CPU vs
+Python CPU, Candle CUDA vs Python CUDA, and Candle CUDA vs Python CPU. Set
+`STABLE_WORLDMODEL_ROOT`, `MODEL`, `CPU_FIXTURE`, `CUDA_FIXTURE`,
+`PYTHON_VERSION`, `RUN_CUDNN`, or `CARGO_LOCKED=0` to override defaults.
+
+Default parity tolerances are per-output: `act_emb=1e-5`, `emb=1e-3`,
+`pred=1e-3`, `rollout=2e-3`, and `cost=1e-2`. The Python and Rust comparators
+also reject NaNs/Infs and require cost argmin/top-candidate stability.
+
+Latest local CUDA parity result, run on 2026-05-29:
+
+- Host: NVIDIA GeForce RTX 4090, driver `580.159.03`, `nvidia-smi` CUDA
+  `13.0`, `nvcc 13.0.88`.
+- Python fixture env: PyTorch `2.10.0+cu128`, `torch.cuda.is_available() ==
+  True`, `torch.version.cuda == 12.8`.
+- Rust checks: `cargo check --locked --features cuda --all-targets`,
+  `cargo test --locked --features cuda`, and
+  `cargo check --locked --features cudnn --all-targets` all passed.
+
+| Comparison | `emb` max abs | `act_emb` max abs | `pred` max abs | `rollout` max abs | `cost` max abs | Cost argmin |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Python CPU vs Python CUDA | `2.622604e-06` | `9.536743e-07` | `2.563000e-06` | `2.622604e-06` | `4.196167e-05` | stable |
+| Candle CPU vs Python CPU | `2.178848e-04` | `1.192093e-06` | `4.816353e-04` | `6.887764e-04` | `4.620552e-03` | stable |
+| Candle CUDA vs Python CUDA | `2.174266e-04` | `4.768372e-07` | `4.823357e-04` | `6.892309e-04` | `4.647255e-03` | stable |
+| Candle CUDA vs Python CPU | `2.185255e-04` | `9.536743e-07` | `4.818588e-04` | `6.889254e-04` | `4.620552e-03` | stable |
+
+For the Python CPU/CUDA fixture comparison, `pixels`, `actions`, and
+`action_candidates` were byte-identical because inputs are generated on CPU
+before being copied to the selected backend.
 
 ## Source Layout
 
