@@ -171,7 +171,7 @@ Make TD-MPC2 usable for both state/vector and pixel observation deployments.
   `pixel_encoder` projection.
 - Pixel-only and combined pixel+state encoding are covered by Rust tests.
 - Pixel-only fixture export/comparison passes on CPU and CUDA.
-- Mixed pixel+state fixture export/comparison passes on CPU.
+- Mixed pixel+state fixture export/comparison passes on CPU and CUDA.
 
 **Done When**
 

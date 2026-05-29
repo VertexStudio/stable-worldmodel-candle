@@ -274,6 +274,12 @@ Latest local TD-MPC2 pixel parity result, run on 2026-05-29:
 - Candle CPU vs Python CPU mixed pixel+state fixture: `z=1.192093e-07`,
   `next_z=6.258488e-07`, `actor_mean=2.607703e-07`,
   `cost=1.907349e-06`, cost argmin stable.
+- Python CPU vs Python CUDA mixed pixel+state fixture drift:
+  `z=1.490116e-07`, `next_z=4.470348e-07`, `actor_mean=1.713634e-07`,
+  `cost=0`, cost argmin stable.
+- Candle CUDA vs Python CUDA mixed pixel+state fixture:
+  `z=1.788139e-07`, `next_z=1.788139e-07`, `actor_mean=1.024455e-07`,
+  `cost=0`, cost argmin stable.
 
 ## Runtime Benchmarks
 
