@@ -1,13 +1,14 @@
 use std::{ffi::CString, ffi::c_void, ptr};
 
 use stable_worldmodel_candle::ffi::{
-    SwmCudaImage, SwmCudaNv12, SwmIcemPlanConfig, SwmLeWm, SwmStatus, SwmTdMpc2,
+    SwmCudaImage, SwmCudaNv12, SwmIcemPlanConfig, SwmLeWm, SwmNvDecCaps, SwmStatus, SwmTdMpc2,
     swm_cuda_image_alloc, swm_cuda_image_free, swm_cuda_image_ptr, swm_cuda_nv12_alloc,
     swm_cuda_nv12_free, swm_cuda_nv12_uv_ptr, swm_cuda_nv12_y_ptr, swm_last_error_message,
     swm_lewm_clear_icem_warm_start, swm_lewm_free, swm_lewm_load, swm_lewm_plan_cem,
     swm_lewm_reset_cuda_image_history, swm_lewm_reset_pixels, swm_lewm_set_goal_pixels,
-    swm_tdmpc2_clear_icem_warm_start, swm_tdmpc2_free, swm_tdmpc2_load, swm_tdmpc2_plan_icem,
-    swm_tdmpc2_reset_cuda_image, swm_tdmpc2_reset_pixels, swm_tdmpc2_reset_state_pixels,
+    swm_nvdec_query_420, swm_tdmpc2_clear_icem_warm_start, swm_tdmpc2_free, swm_tdmpc2_load,
+    swm_tdmpc2_plan_icem, swm_tdmpc2_reset_cuda_image, swm_tdmpc2_reset_pixels,
+    swm_tdmpc2_reset_state_pixels,
 };
 
 #[test]
@@ -123,6 +124,28 @@ fn ffi_cuda_image_alloc_rejects_unknown_format() {
     assert_eq!(status, SwmStatus::RuntimeError);
     assert!(image.is_null());
     assert!(last_error().contains("unknown packed CUDA image format"));
+}
+
+#[test]
+fn ffi_nvdec_query_420_reports_h264_cuda_caps() {
+    let mut caps = SwmNvDecCaps::default();
+    let status = unsafe { swm_nvdec_query_420(ptr::null(), 0, 0, &mut caps) };
+
+    assert_eq!(status, SwmStatus::Ok);
+    assert_eq!(caps.supported, 1);
+    assert!(caps.nvdec_count > 0);
+    assert!(caps.max_width >= caps.min_width);
+    assert!(caps.max_height >= caps.min_height);
+    assert_eq!(caps.supports_nv12, 1);
+}
+
+#[test]
+fn ffi_nvdec_query_420_rejects_unknown_codec() {
+    let mut caps = SwmNvDecCaps::default();
+    let status = unsafe { swm_nvdec_query_420(ptr::null(), 99, 0, &mut caps) };
+
+    assert_eq!(status, SwmStatus::RuntimeError);
+    assert!(last_error().contains("unknown NVDECODE codec"));
 }
 
 #[test]

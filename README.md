@@ -44,8 +44,9 @@ compatibility is not a reason to keep slower runtime paths in this crate.
   scoring; session caching; and Rust-native MPC planning.
 - NVIDIA media path: nvJPEG decode into Candle CUDA tensors, packed
   RGB/BGR/RGBA/BGRA CUDA frame preprocessing, NV12 CUDA surface preprocessing,
-  fused resize/reorder/colorspace/normalization kernels, and history-slot writes
-  for image/video control loops.
+  direct `libnvcuvid` NVDECODE capability probing, fused
+  resize/reorder/colorspace/normalization kernels, and history-slot writes for
+  image/video control loops.
 - Planning solvers: CEM, MPPI, and iCEM generate candidates, score world-model
   rollouts, select/update action sequences, and keep the hot planning path on
   Candle CUDA tensors.
@@ -247,6 +248,12 @@ SwmCudaImage / SwmCudaNv12
   -> session reset on model-ready Candle CUDA tensor
 ```
 
+NVDECODE capability probing is linked directly against `libnvcuvid`.
+`media::nvdec::query_caps_420` and `swm_nvdec_query_420` bind the same Candle
+CUDA context used by model inference, then query codec support for 4:2:0 video
+at the requested bit depth. Use `bit_depth_minus_8 = 0` for 8-bit H.264/HEVC/AV1
+streams and `2` for 10-bit surfaces.
+
 For video-surface ingestion, `Nv12Preprocessor` accepts CUDA-resident NV12
 planes as `Y [batch, height, width]` and `UV [batch, height / 2, width / 2, 2]`.
 It fuses BT.601/BT.709 YUV-to-RGB conversion, full/video range handling,
@@ -260,16 +267,27 @@ and `Nv12HistoryPreprocessor` write decoded frame formats into selected
 `[batch, time, 3, height, width]` slots for LeWM image-history and video
 pipelines.
 
-Build and validate the NVIDIA JPEG path:
+Build and validate the NVIDIA media path:
 
 ```bash
+cargo test --locked media::nvdec -- --nocapture
+cargo test --locked ffi_nvdec -- --nocapture
 cargo test media -- --nocapture
 cargo check --features nvjpeg --all-targets
 cargo test --features nvjpeg media -- --nocapture
 ```
 
 Set `CUDA_HOME` or `CUDA_PATH` when CUDA is installed outside the standard
-`/usr/local/cuda*` locations so Cargo can find the NVIDIA libraries.
+`/usr/local/cuda*` locations so Cargo can find the NVIDIA libraries. Set
+`NVIDIA_VIDEO_CODEC_SDK_PATH` when `libnvcuvid.so` is installed outside the
+standard linker paths.
+
+Latest local NVDECODE capability validation, run on 2026-06-01:
+
+- `cargo test --locked media::nvdec -- --nocapture` passed.
+- `cargo test --locked ffi_nvdec -- --nocapture` passed.
+- H.264 8-bit 4:2:0 caps on `cuda:0`: supported, 1 NVDEC, NV12 output,
+  min `48x16`, max `4096x4096`, histogram support enabled with 256 bins.
 
 For backend parity, generate a Python CUDA fixture, then compare Candle CUDA
 against it:
@@ -296,8 +314,9 @@ benchmarking, runs with gradients off, and exports model outputs after
 Linux with NVIDIA CUDA and cuDNN is required. The crate rejects non-Linux
 targets and builds without the CUDA/cuDNN feature stack at compile time.
 Install the NVIDIA libraries needed by the runtime path you are validating:
-CUDA Toolkit, cuDNN, and for encoded media ingestion, nvJPEG/NPP/NVDEC-facing
-development packages as those paths land.
+CUDA Toolkit, cuDNN, `libnvcuvid`, and for encoded image ingestion, nvJPEG.
+NPP is expected for additional YUV/video conversion surfaces as those paths
+are implemented.
 
 CUDA/cuDNN is the default runtime:
 
@@ -470,6 +489,8 @@ size_t image_pitch = 0;
 status = swm_cuda_image_ptr(image, &image_ptr, &image_pitch);
 /* Fill image_ptr from CUDA/NVIDIA code, then submit it. */
 status = swm_tdmpc2_reset_cuda_image(rt, image);
+SwmNvDecCaps nvdec_caps = {0};
+status = swm_nvdec_query_420("cuda:0", SWM_NVDEC_CODEC_H264, 0, &nvdec_caps);
 status = swm_tdmpc2_reset_state_pixels(
     rt, state_f32, pixels_f32, batch, state_dim, image_size, image_size,
     SWM_PIXEL_LAYOUT_NCHW);
@@ -504,11 +525,12 @@ image_size]` f32 history tensors; `swm_lewm_reset_cuda_image_history` and
 goal with `swm_lewm_set_goal_pixels` or a CUDA media goal-history entrypoint
 before calling a LeWM planner entrypoint.
 
-Latest local C ABI validation after adding CUDA media handles and reset
-entrypoints, run on 2026-06-01:
+Latest local C ABI validation after adding CUDA media handles, reset
+entrypoints, and NVDECODE capability probing, run on 2026-06-01:
 
 - `cargo check --locked --all-targets` passed.
 - `cargo test --locked --test ffi -- --nocapture` passed.
+- `cargo test --locked ffi_nvdec -- --nocapture` passed.
 - `cargo build --locked --release --lib` produced the release library.
 
 ## Source Layout
@@ -561,7 +583,9 @@ checkpoint plus config.
 ## Remaining Work
 
 - Add compact fixture integration tests once small public test weights are available.
-- Add TD-MPC2 pixel fixture parity and policy rollout sampling.
+- Add NVDECODE parser/decoder sessions that write directly into Rust-owned
+  CUDA NV12 buffers.
+- Add TD-MPC2 policy rollout sampling.
 - Add planner buffer reuse/preallocation for lower steady-state allocation cost.
 - Add safetensors export guidance for deployments that prefer mmap loading.
 - Add C ABI overhead benchmarks for TD-MPC2 and LeWM deployment calls.

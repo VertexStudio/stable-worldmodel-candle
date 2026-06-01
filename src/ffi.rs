@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    ffi::{CStr, CString, c_char, c_int, c_void},
+    ffi::{CStr, CString, c_char, c_int, c_uint, c_void},
     panic::{AssertUnwindSafe, catch_unwind},
     ptr,
 };
@@ -14,6 +14,7 @@ use crate::{
     media::{
         ImagePreprocess, ImagePreprocessor, Nv12ColorSpace, Nv12ImageShape, Nv12Preprocessor,
         PackedImageFormat, PackedImageShape, cuda_u8_tensor_device_ptr, nv12_tensors,
+        nvdec::{NvDecCodec, NvDecSurfaceFormat, query_caps_420},
         packed_u8_tensor,
     },
     models::{
@@ -114,6 +115,26 @@ impl Default for SwmIcemPlanConfig {
             min_std: 1e-3,
         }
     }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SwmNvDecCaps {
+    pub supported: c_int,
+    pub nvdec_count: usize,
+    pub min_width: usize,
+    pub min_height: usize,
+    pub max_width: usize,
+    pub max_height: usize,
+    pub max_macroblock_count: usize,
+    pub output_format_mask: c_uint,
+    pub supports_nv12: c_int,
+    pub supports_p016: c_int,
+    pub supports_yuv444: c_int,
+    pub supports_yuv444_16bit: c_int,
+    pub histogram_supported: c_int,
+    pub histogram_counter_bit_depth: usize,
+    pub max_histogram_bins: usize,
 }
 
 #[repr(C)]
@@ -412,6 +433,45 @@ pub unsafe extern "C" fn swm_cuda_nv12_uv_ptr(
                 *pitch_bytes_out = handle.shape.width;
             }
         }
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_nvdec_query_420(
+    device: *const c_char,
+    codec: c_int,
+    bit_depth_minus_8: c_uint,
+    out: *mut SwmNvDecCaps,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let device = unsafe { optional_string(device)? }
+            .as_deref()
+            .unwrap_or("cuda:0")
+            .parse::<DeviceSpec>()
+            .map_err(FfiError::invalid)?
+            .resolve()
+            .map_err(FfiError::runtime)?;
+        let codec = NvDecCodec::try_from(codec as u32).map_err(FfiError::runtime)?;
+        let caps = query_caps_420(&device, codec, bit_depth_minus_8).map_err(FfiError::runtime)?;
+        let out = unsafe { required_mut(out, "out")? };
+        *out = SwmNvDecCaps {
+            supported: c_flag(caps.supported),
+            nvdec_count: caps.nvdec_count,
+            min_width: caps.min_width,
+            min_height: caps.min_height,
+            max_width: caps.max_width,
+            max_height: caps.max_height,
+            max_macroblock_count: caps.max_macroblock_count,
+            output_format_mask: caps.output_format_mask,
+            supports_nv12: c_flag(caps.supports(NvDecSurfaceFormat::Nv12)),
+            supports_p016: c_flag(caps.supports(NvDecSurfaceFormat::P016)),
+            supports_yuv444: c_flag(caps.supports(NvDecSurfaceFormat::Yuv444)),
+            supports_yuv444_16bit: c_flag(caps.supports(NvDecSurfaceFormat::Yuv44416Bit)),
+            histogram_supported: c_flag(caps.histogram_supported),
+            histogram_counter_bit_depth: caps.histogram_counter_bit_depth,
+            max_histogram_bins: caps.max_histogram_bins,
+        };
         Ok(())
     })
 }
@@ -1095,6 +1155,10 @@ fn image_preprocess_from_config(
         mean: preprocess.image_mean.unwrap_or([0.0, 0.0, 0.0]),
         std: preprocess.image_std.unwrap_or([1.0, 1.0, 1.0]),
     }
+}
+
+fn c_flag(value: bool) -> c_int {
+    if value { 1 } else { 0 }
 }
 
 fn tdmpc2_preprocess_cuda_image(handle: &SwmTdMpc2, image: &SwmCudaImage) -> FfiResult<Tensor> {

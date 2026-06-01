@@ -38,6 +38,13 @@ typedef enum SwmNv12ColorSpace {
   SWM_NV12_COLOR_SPACE_BT709_FULL = 3,
 } SwmNv12ColorSpace;
 
+typedef enum SwmNvDecCodec {
+  SWM_NVDEC_CODEC_H264 = 0,
+  SWM_NVDEC_CODEC_HEVC = 1,
+  SWM_NVDEC_CODEC_AV1 = 2,
+  SWM_NVDEC_CODEC_VP9 = 3,
+} SwmNvDecCodec;
+
 typedef struct SwmCemPlanConfig {
   size_t horizon;
   size_t samples;
@@ -64,6 +71,24 @@ typedef struct SwmIcemPlanConfig {
   float init_std;
   float min_std;
 } SwmIcemPlanConfig;
+
+typedef struct SwmNvDecCaps {
+  int supported;
+  size_t nvdec_count;
+  size_t min_width;
+  size_t min_height;
+  size_t max_width;
+  size_t max_height;
+  size_t max_macroblock_count;
+  unsigned int output_format_mask;
+  int supports_nv12;
+  int supports_p016;
+  int supports_yuv444;
+  int supports_yuv444_16bit;
+  int histogram_supported;
+  size_t histogram_counter_bit_depth;
+  size_t max_histogram_bins;
+} SwmNvDecCaps;
 
 const char *swm_last_error_message(void);
 
@@ -109,6 +134,11 @@ SwmStatus swm_cuda_nv12_y_ptr(const SwmCudaNv12 *handle,
 SwmStatus swm_cuda_nv12_uv_ptr(const SwmCudaNv12 *handle,
                                void **out,
                                size_t *pitch_bytes_out);
+
+SwmStatus swm_nvdec_query_420(const char *device,
+                              SwmNvDecCodec codec,
+                              unsigned int bit_depth_minus_8,
+                              SwmNvDecCaps *out);
 
 SwmStatus swm_tdmpc2_state_dim(const SwmTdMpc2 *handle, size_t *out);
 

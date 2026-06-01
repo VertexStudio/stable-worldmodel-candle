@@ -4,6 +4,7 @@
 //! launches preprocessing kernels on the same CUDA stream Candle uses for model
 //! execution.
 
+pub mod nvdec;
 #[cfg(feature = "nvjpeg")]
 pub mod nvjpeg;
 
