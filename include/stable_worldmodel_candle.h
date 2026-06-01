@@ -2,13 +2,14 @@
 #define STABLE_WORLDMODEL_CANDLE_H
 
 #include <stddef.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct SwmTdMpc2 SwmTdMpc2;
 typedef struct SwmLeWm SwmLeWm;
+typedef struct SwmCudaImage SwmCudaImage;
+typedef struct SwmCudaNv12 SwmCudaNv12;
 
 typedef enum SwmStatus {
   SWM_STATUS_OK = 0,
@@ -22,6 +23,20 @@ typedef enum SwmPixelLayout {
   SWM_PIXEL_LAYOUT_NCHW = 0,
   SWM_PIXEL_LAYOUT_NHWC = 1,
 } SwmPixelLayout;
+
+typedef enum SwmPackedImageFormat {
+  SWM_PACKED_IMAGE_FORMAT_RGB = 0,
+  SWM_PACKED_IMAGE_FORMAT_BGR = 1,
+  SWM_PACKED_IMAGE_FORMAT_RGBA = 2,
+  SWM_PACKED_IMAGE_FORMAT_BGRA = 3,
+} SwmPackedImageFormat;
+
+typedef enum SwmNv12ColorSpace {
+  SWM_NV12_COLOR_SPACE_BT601_VIDEO = 0,
+  SWM_NV12_COLOR_SPACE_BT709_VIDEO = 1,
+  SWM_NV12_COLOR_SPACE_BT601_FULL = 2,
+  SWM_NV12_COLOR_SPACE_BT709_FULL = 3,
+} SwmNv12ColorSpace;
 
 typedef struct SwmCemPlanConfig {
   size_t horizon;
@@ -65,6 +80,35 @@ SwmStatus swm_lewm_load(const char *artifact_dir,
 void swm_tdmpc2_free(SwmTdMpc2 *handle);
 
 void swm_lewm_free(SwmLeWm *handle);
+
+SwmStatus swm_cuda_image_alloc(const char *device,
+                               size_t batch,
+                               size_t height,
+                               size_t width,
+                               SwmPackedImageFormat format,
+                               SwmCudaImage **out);
+
+void swm_cuda_image_free(SwmCudaImage *handle);
+
+SwmStatus swm_cuda_image_ptr(const SwmCudaImage *handle,
+                             void **out,
+                             size_t *pitch_bytes_out);
+
+SwmStatus swm_cuda_nv12_alloc(const char *device,
+                              size_t batch,
+                              size_t height,
+                              size_t width,
+                              SwmCudaNv12 **out);
+
+void swm_cuda_nv12_free(SwmCudaNv12 *handle);
+
+SwmStatus swm_cuda_nv12_y_ptr(const SwmCudaNv12 *handle,
+                              void **out,
+                              size_t *pitch_bytes_out);
+
+SwmStatus swm_cuda_nv12_uv_ptr(const SwmCudaNv12 *handle,
+                               void **out,
+                               size_t *pitch_bytes_out);
 
 SwmStatus swm_tdmpc2_state_dim(const SwmTdMpc2 *handle, size_t *out);
 
@@ -112,6 +156,48 @@ SwmStatus swm_tdmpc2_reset_state_pixels(SwmTdMpc2 *handle,
                                         size_t height,
                                         size_t width,
                                         SwmPixelLayout layout);
+
+SwmStatus swm_tdmpc2_reset_cuda_image(SwmTdMpc2 *handle,
+                                      const SwmCudaImage *image);
+
+SwmStatus swm_tdmpc2_reset_state_cuda_image(SwmTdMpc2 *handle,
+                                            const float *state,
+                                            size_t batch,
+                                            size_t state_dim,
+                                            const SwmCudaImage *image);
+
+SwmStatus swm_tdmpc2_reset_cuda_nv12(SwmTdMpc2 *handle,
+                                     const SwmCudaNv12 *nv12,
+                                     SwmNv12ColorSpace color_space);
+
+SwmStatus swm_tdmpc2_reset_state_cuda_nv12(SwmTdMpc2 *handle,
+                                           const float *state,
+                                           size_t batch,
+                                           size_t state_dim,
+                                           const SwmCudaNv12 *nv12,
+                                           SwmNv12ColorSpace color_space);
+
+SwmStatus swm_lewm_reset_cuda_image_history(SwmLeWm *handle,
+                                            const SwmCudaImage *image,
+                                            size_t batch,
+                                            size_t time);
+
+SwmStatus swm_lewm_set_goal_cuda_image_history(SwmLeWm *handle,
+                                               const SwmCudaImage *image,
+                                               size_t batch,
+                                               size_t time);
+
+SwmStatus swm_lewm_reset_cuda_nv12_history(SwmLeWm *handle,
+                                           const SwmCudaNv12 *nv12,
+                                           size_t batch,
+                                           size_t time,
+                                           SwmNv12ColorSpace color_space);
+
+SwmStatus swm_lewm_set_goal_cuda_nv12_history(SwmLeWm *handle,
+                                              const SwmCudaNv12 *nv12,
+                                              size_t batch,
+                                              size_t time,
+                                              SwmNv12ColorSpace color_space);
 
 SwmStatus swm_tdmpc2_plan_cem(SwmTdMpc2 *handle,
                               SwmCemPlanConfig config,

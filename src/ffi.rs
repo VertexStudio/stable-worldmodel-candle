@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    ffi::{CStr, CString, c_char, c_int},
+    ffi::{CStr, CString, c_char, c_int, c_void},
     panic::{AssertUnwindSafe, catch_unwind},
     ptr,
 };
@@ -11,6 +11,11 @@ use crate::{
     artifact::{DeploymentArtifact, PreprocessConfig, RuntimeSchema},
     checkpoint,
     config::ModelConfig,
+    media::{
+        ImagePreprocess, ImagePreprocessor, Nv12ColorSpace, Nv12ImageShape, Nv12Preprocessor,
+        PackedImageFormat, PackedImageShape, cuda_u8_tensor_device_ptr, nv12_tensors,
+        packed_u8_tensor,
+    },
     models::{
         lewm::{LeWm, LeWmConfig},
         tdmpc2::{TdMpc2, TdMpc2Config},
@@ -122,6 +127,7 @@ pub struct SwmTdMpc2 {
     session: TdMpc2Session,
     state_dim: Option<usize>,
     image_size: Option<usize>,
+    image_preprocess: Option<ImagePreprocess>,
     action_dim: usize,
     action_bounds: ActionBounds,
     icem_planner: Option<IcemPlanner>,
@@ -133,8 +139,20 @@ pub struct SwmLeWm {
     action_dim: usize,
     image_size: usize,
     history_size: usize,
+    image_preprocess: ImagePreprocess,
     action_bounds: ActionBounds,
     icem_planner: Option<IcemPlanner>,
+}
+
+pub struct SwmCudaImage {
+    tensor: Tensor,
+    shape: PackedImageShape,
+}
+
+pub struct SwmCudaNv12 {
+    y_plane: Tensor,
+    uv_plane: Tensor,
+    shape: Nv12ImageShape,
 }
 
 #[unsafe(no_mangle)]
@@ -180,12 +198,15 @@ pub unsafe extern "C" fn swm_tdmpc2_load(
         let action_dim = config.action_dim;
         let action_bounds =
             action_bounds_from_schema(&artifact.schema, &artifact.preprocess, action_dim)?;
+        let image_preprocess = image_size
+            .map(|image_size| image_preprocess_from_config(&artifact.preprocess, image_size));
         let session = load_tdmpc2_session(config, &artifact.weights, dtype, &device)?;
 
         let handle = Box::new(SwmTdMpc2 {
             session,
             state_dim,
             image_size,
+            image_preprocess,
             action_dim,
             action_bounds,
             icem_planner: None,
@@ -230,6 +251,7 @@ pub unsafe extern "C" fn swm_lewm_load(
         let history_size = config.history_size;
         let action_bounds =
             action_bounds_from_schema(&artifact.schema, &artifact.preprocess, action_dim)?;
+        let image_preprocess = image_preprocess_from_config(&artifact.preprocess, image_size);
         let session = load_lewm_session(config, &artifact.weights, dtype, &device)?;
 
         let handle = Box::new(SwmLeWm {
@@ -238,6 +260,7 @@ pub unsafe extern "C" fn swm_lewm_load(
             action_dim,
             image_size,
             history_size,
+            image_preprocess,
             action_bounds,
             icem_planner: None,
         });
@@ -262,6 +285,135 @@ pub unsafe extern "C" fn swm_lewm_free(handle: *mut SwmLeWm) {
             drop(Box::from_raw(handle));
         }
     }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_cuda_image_alloc(
+    device: *const c_char,
+    batch: usize,
+    height: usize,
+    width: usize,
+    format: c_int,
+    out: *mut *mut SwmCudaImage,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let device = unsafe { optional_string(device)? }
+            .as_deref()
+            .unwrap_or("cuda:0")
+            .parse::<DeviceSpec>()
+            .map_err(FfiError::invalid)?
+            .resolve()
+            .map_err(FfiError::runtime)?;
+        let format = PackedImageFormat::try_from(format as u32).map_err(FfiError::runtime)?;
+        let shape = PackedImageShape::new(batch, height, width, format);
+        let tensor = packed_u8_tensor(shape, &device).map_err(FfiError::runtime)?;
+        let out = unsafe { required_mut(out, "out")? };
+        *out = Box::into_raw(Box::new(SwmCudaImage { tensor, shape }));
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_cuda_image_free(handle: *mut SwmCudaImage) {
+    if !handle.is_null() {
+        unsafe {
+            drop(Box::from_raw(handle));
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_cuda_image_ptr(
+    handle: *const SwmCudaImage,
+    out: *mut *mut c_void,
+    pitch_bytes_out: *mut usize,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_ref(handle, "handle")? };
+        let out = unsafe { required_mut(out, "out")? };
+        *out = cuda_u8_tensor_device_ptr(&handle.tensor).map_err(FfiError::runtime)?;
+        if !pitch_bytes_out.is_null() {
+            unsafe {
+                *pitch_bytes_out = handle.shape.width * handle.shape.channels();
+            }
+        }
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_cuda_nv12_alloc(
+    device: *const c_char,
+    batch: usize,
+    height: usize,
+    width: usize,
+    out: *mut *mut SwmCudaNv12,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let device = unsafe { optional_string(device)? }
+            .as_deref()
+            .unwrap_or("cuda:0")
+            .parse::<DeviceSpec>()
+            .map_err(FfiError::invalid)?
+            .resolve()
+            .map_err(FfiError::runtime)?;
+        let shape = Nv12ImageShape::new(batch, height, width);
+        let (y_plane, uv_plane) = nv12_tensors(shape, &device).map_err(FfiError::runtime)?;
+        let out = unsafe { required_mut(out, "out")? };
+        *out = Box::into_raw(Box::new(SwmCudaNv12 {
+            y_plane,
+            uv_plane,
+            shape,
+        }));
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_cuda_nv12_free(handle: *mut SwmCudaNv12) {
+    if !handle.is_null() {
+        unsafe {
+            drop(Box::from_raw(handle));
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_cuda_nv12_y_ptr(
+    handle: *const SwmCudaNv12,
+    out: *mut *mut c_void,
+    pitch_bytes_out: *mut usize,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_ref(handle, "handle")? };
+        let out = unsafe { required_mut(out, "out")? };
+        *out = cuda_u8_tensor_device_ptr(&handle.y_plane).map_err(FfiError::runtime)?;
+        if !pitch_bytes_out.is_null() {
+            unsafe {
+                *pitch_bytes_out = handle.shape.width;
+            }
+        }
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_cuda_nv12_uv_ptr(
+    handle: *const SwmCudaNv12,
+    out: *mut *mut c_void,
+    pitch_bytes_out: *mut usize,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_ref(handle, "handle")? };
+        let out = unsafe { required_mut(out, "out")? };
+        *out = cuda_u8_tensor_device_ptr(&handle.uv_plane).map_err(FfiError::runtime)?;
+        if !pitch_bytes_out.is_null() {
+            unsafe {
+                *pitch_bytes_out = handle.shape.width;
+            }
+        }
+        Ok(())
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -455,6 +607,202 @@ pub unsafe extern "C" fn swm_tdmpc2_reset_state_pixels(
             .session
             .reset_observations(&[("pixels", &pixels), ("state", &state)])
             .map_err(FfiError::runtime)?;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_tdmpc2_reset_cuda_image(
+    handle: *mut SwmTdMpc2,
+    image: *const SwmCudaImage,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        if handle.state_dim.is_some() && handle.image_size.is_some() {
+            return Err(FfiError::invalid(
+                "TD-MPC2 artifact also requires state; use swm_tdmpc2_reset_state_cuda_image",
+            ));
+        }
+        let pixels =
+            tdmpc2_preprocess_cuda_image(handle, unsafe { required_ref(image, "image")? })?;
+        handle
+            .session
+            .reset_pixels(&pixels)
+            .map_err(FfiError::runtime)?;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_tdmpc2_reset_state_cuda_image(
+    handle: *mut SwmTdMpc2,
+    state: *const f32,
+    batch: usize,
+    state_dim: usize,
+    image: *const SwmCudaImage,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let state = unsafe { state_tensor_from_ffi(handle, state, batch, state_dim)? };
+        let pixels =
+            tdmpc2_preprocess_cuda_image(handle, unsafe { required_ref(image, "image")? })?;
+        handle
+            .session
+            .reset_observations(&[("pixels", &pixels), ("state", &state)])
+            .map_err(FfiError::runtime)?;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_tdmpc2_reset_cuda_nv12(
+    handle: *mut SwmTdMpc2,
+    nv12: *const SwmCudaNv12,
+    color_space: c_int,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        if handle.state_dim.is_some() && handle.image_size.is_some() {
+            return Err(FfiError::invalid(
+                "TD-MPC2 artifact also requires state; use swm_tdmpc2_reset_state_cuda_nv12",
+            ));
+        }
+        let pixels = tdmpc2_preprocess_cuda_nv12(
+            handle,
+            unsafe { required_ref(nv12, "nv12")? },
+            color_space,
+        )?;
+        handle
+            .session
+            .reset_pixels(&pixels)
+            .map_err(FfiError::runtime)?;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_tdmpc2_reset_state_cuda_nv12(
+    handle: *mut SwmTdMpc2,
+    state: *const f32,
+    batch: usize,
+    state_dim: usize,
+    nv12: *const SwmCudaNv12,
+    color_space: c_int,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let state = unsafe { state_tensor_from_ffi(handle, state, batch, state_dim)? };
+        let pixels = tdmpc2_preprocess_cuda_nv12(
+            handle,
+            unsafe { required_ref(nv12, "nv12")? },
+            color_space,
+        )?;
+        handle
+            .session
+            .reset_observations(&[("pixels", &pixels), ("state", &state)])
+            .map_err(FfiError::runtime)?;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_reset_cuda_image_history(
+    handle: *mut SwmLeWm,
+    image: *const SwmCudaImage,
+    batch: usize,
+    time: usize,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let pixels = lewm_preprocess_cuda_image_history(
+            handle,
+            unsafe { required_ref(image, "image")? },
+            batch,
+            time,
+            true,
+        )?;
+        handle
+            .session
+            .reset_pixels(&pixels)
+            .map_err(FfiError::runtime)?;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_set_goal_cuda_image_history(
+    handle: *mut SwmLeWm,
+    image: *const SwmCudaImage,
+    batch: usize,
+    time: usize,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let pixels = lewm_preprocess_cuda_image_history(
+            handle,
+            unsafe { required_ref(image, "image")? },
+            batch,
+            time,
+            false,
+        )?;
+        let goal_emb = handle
+            .session
+            .encode_pixels(&pixels)
+            .map_err(FfiError::runtime)?;
+        handle.goal_emb = Some(goal_emb);
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_reset_cuda_nv12_history(
+    handle: *mut SwmLeWm,
+    nv12: *const SwmCudaNv12,
+    batch: usize,
+    time: usize,
+    color_space: c_int,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let pixels = lewm_preprocess_cuda_nv12_history(
+            handle,
+            unsafe { required_ref(nv12, "nv12")? },
+            batch,
+            time,
+            color_space,
+            true,
+        )?;
+        handle
+            .session
+            .reset_pixels(&pixels)
+            .map_err(FfiError::runtime)?;
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_lewm_set_goal_cuda_nv12_history(
+    handle: *mut SwmLeWm,
+    nv12: *const SwmCudaNv12,
+    batch: usize,
+    time: usize,
+    color_space: c_int,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let pixels = lewm_preprocess_cuda_nv12_history(
+            handle,
+            unsafe { required_ref(nv12, "nv12")? },
+            batch,
+            time,
+            color_space,
+            false,
+        )?;
+        let goal_emb = handle
+            .session
+            .encode_pixels(&pixels)
+            .map_err(FfiError::runtime)?;
+        handle.goal_emb = Some(goal_emb);
         Ok(())
     })
 }
@@ -735,6 +1083,154 @@ fn load_lewm_session(
         checkpoint::var_builder_from_path(weights, dtype, device).map_err(FfiError::runtime)?;
     let model = LeWm::new(config, vb).map_err(FfiError::runtime)?;
     Ok(LeWmSession::new(model, device.clone(), dtype))
+}
+
+fn image_preprocess_from_config(
+    preprocess: &PreprocessConfig,
+    image_size: usize,
+) -> ImagePreprocess {
+    ImagePreprocess {
+        output_height: preprocess.image_size.unwrap_or(image_size),
+        output_width: preprocess.image_size.unwrap_or(image_size),
+        mean: preprocess.image_mean.unwrap_or([0.0, 0.0, 0.0]),
+        std: preprocess.image_std.unwrap_or([1.0, 1.0, 1.0]),
+    }
+}
+
+fn tdmpc2_preprocess_cuda_image(handle: &SwmTdMpc2, image: &SwmCudaImage) -> FfiResult<Tensor> {
+    let Some(image_size) = handle.image_size else {
+        return Err(FfiError::invalid(
+            "TD-MPC2 artifact does not have a pixel observation",
+        ));
+    };
+    if image.shape.batch == 0 {
+        return Err(FfiError::invalid("image batch must be greater than zero"));
+    }
+    let config = handle
+        .image_preprocess
+        .unwrap_or_else(|| image_preprocess_from_config(&PreprocessConfig::default(), image_size));
+    let mut preprocessor = ImagePreprocessor::new(handle.session.device(), image.shape, config)
+        .map_err(FfiError::runtime)?;
+    let pixels = preprocessor
+        .preprocess_packed_u8(&image.tensor)
+        .map_err(FfiError::runtime)?
+        .clone();
+    Ok(pixels)
+}
+
+fn tdmpc2_preprocess_cuda_nv12(
+    handle: &SwmTdMpc2,
+    nv12: &SwmCudaNv12,
+    color_space: c_int,
+) -> FfiResult<Tensor> {
+    let Some(image_size) = handle.image_size else {
+        return Err(FfiError::invalid(
+            "TD-MPC2 artifact does not have a pixel observation",
+        ));
+    };
+    if nv12.shape.batch == 0 {
+        return Err(FfiError::invalid("NV12 batch must be greater than zero"));
+    }
+    let color_space = Nv12ColorSpace::try_from(color_space as u32).map_err(FfiError::runtime)?;
+    let config = handle
+        .image_preprocess
+        .unwrap_or_else(|| image_preprocess_from_config(&PreprocessConfig::default(), image_size));
+    let mut preprocessor =
+        Nv12Preprocessor::new(handle.session.device(), nv12.shape, color_space, config)
+            .map_err(FfiError::runtime)?;
+    let pixels = preprocessor
+        .preprocess_nv12(&nv12.y_plane, &nv12.uv_plane)
+        .map_err(FfiError::runtime)?
+        .clone();
+    Ok(pixels)
+}
+
+fn lewm_preprocess_cuda_image_history(
+    handle: &SwmLeWm,
+    image: &SwmCudaImage,
+    batch: usize,
+    time: usize,
+    require_config_history: bool,
+) -> FfiResult<Tensor> {
+    validate_lewm_media_history(
+        handle,
+        image.shape.batch,
+        batch,
+        time,
+        require_config_history,
+    )?;
+    let mut preprocessor = ImagePreprocessor::new(
+        handle.session.device(),
+        image.shape,
+        handle.image_preprocess,
+    )
+    .map_err(FfiError::runtime)?;
+    let pixels = preprocessor
+        .preprocess_packed_u8(&image.tensor)
+        .map_err(FfiError::runtime)?
+        .reshape((batch, time, 3usize, handle.image_size, handle.image_size))
+        .map_err(FfiError::runtime)?;
+    Ok(pixels)
+}
+
+fn lewm_preprocess_cuda_nv12_history(
+    handle: &SwmLeWm,
+    nv12: &SwmCudaNv12,
+    batch: usize,
+    time: usize,
+    color_space: c_int,
+    require_config_history: bool,
+) -> FfiResult<Tensor> {
+    validate_lewm_media_history(
+        handle,
+        nv12.shape.batch,
+        batch,
+        time,
+        require_config_history,
+    )?;
+    let color_space = Nv12ColorSpace::try_from(color_space as u32).map_err(FfiError::runtime)?;
+    let mut preprocessor = Nv12Preprocessor::new(
+        handle.session.device(),
+        nv12.shape,
+        color_space,
+        handle.image_preprocess,
+    )
+    .map_err(FfiError::runtime)?;
+    let pixels = preprocessor
+        .preprocess_nv12(&nv12.y_plane, &nv12.uv_plane)
+        .map_err(FfiError::runtime)?
+        .reshape((batch, time, 3usize, handle.image_size, handle.image_size))
+        .map_err(FfiError::runtime)?;
+    Ok(pixels)
+}
+
+fn validate_lewm_media_history(
+    handle: &SwmLeWm,
+    media_batch: usize,
+    batch: usize,
+    time: usize,
+    require_config_history: bool,
+) -> FfiResult<()> {
+    if batch == 0 || time == 0 {
+        return Err(FfiError::invalid(
+            "LeWM media history batch and time must be greater than zero",
+        ));
+    }
+    if require_config_history && time != handle.history_size {
+        return Err(FfiError::invalid(format!(
+            "LeWM current pixel history must have time={} frames, got {time}",
+            handle.history_size
+        )));
+    }
+    let expected = batch
+        .checked_mul(time)
+        .ok_or_else(|| FfiError::invalid("LeWM media history batch overflow"))?;
+    if media_batch != expected {
+        return Err(FfiError::invalid(format!(
+            "LeWM media buffer batch {media_batch} must equal batch*time {expected}"
+        )));
+    }
+    Ok(())
 }
 
 unsafe fn lewm_pixels_from_ffi(

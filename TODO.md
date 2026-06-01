@@ -45,6 +45,9 @@ predictable and deployment practical.
 - CUDA NV12 preprocessing now converts CUDA-resident Y and UV planes through
   fused BT.601/BT.709 color conversion, resize, normalization, and NCHW/history
   writes for video-surface ingestion.
+- The C ABI now exposes Rust-owned CUDA packed-image and NV12 media buffers,
+  device pointer queries, and TD-MPC2/LeWM reset calls that preprocess those
+  buffers before session reset.
 - `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
   and TD-MPC2 paths, including TD-MPC2 CEM/MPPI/iCEM planning latency.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
@@ -141,6 +144,7 @@ Make image/video/state inputs first-class Rust runtime inputs.
   - fused Candle CUDA resize/channel/normalize kernels;
   - history-slot writes for LeWM/video frame windows;
   - NV12 Y/UV CUDA surface preprocessing for video frames;
+  - C ABI CUDA media buffer allocation and pointer queries;
   - NVDEC video frame decode into CUDA buffers;
   - NPP or fused CUDA color conversion for additional YUV surface formats.
 - Add state/action preprocessing:

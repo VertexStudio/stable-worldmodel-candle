@@ -232,6 +232,21 @@ packed U8 RGB/BGR/RGBA/BGRA CUDA tensor
   -> F32 NCHW Candle CUDA tensor
 ```
 
+The C ABI exposes opaque `SwmCudaImage` and `SwmCudaNv12` handles for callers
+that need Rust-owned, Candle-compatible CUDA buffers. Callers allocate a buffer,
+query its device pointer and pitch, write with CUDA/NVIDIA APIs, then reset the
+runtime directly from that buffer:
+
+```text
+SwmCudaImage / SwmCudaNv12
+  -> device pointer query
+  -> caller writes with CUDA, nvJPEG, NPP, or NVDEC/NVDECODE
+  -> caller completes the write on its CUDA stream
+  -> swm_*_reset_cuda_image / swm_*_reset_cuda_nv12
+  -> fused CUDA preprocess
+  -> session reset on model-ready Candle CUDA tensor
+```
+
 For video-surface ingestion, `Nv12Preprocessor` accepts CUDA-resident NV12
 planes as `Y [batch, height, width]` and `UV [batch, height / 2, width / 2, 2]`.
 It fuses BT.601/BT.709 YUV-to-RGB conversion, full/video range handling,
@@ -447,6 +462,14 @@ SwmStatus status = swm_tdmpc2_load("/path/to/artifact", "cuda:0", "f32", &rt);
 status = swm_tdmpc2_reset_state(rt, state_f32, batch, state_dim);
 status = swm_tdmpc2_reset_pixels(
     rt, pixels_f32, batch, image_size, image_size, SWM_PIXEL_LAYOUT_NCHW);
+SwmCudaImage *image = NULL;
+status = swm_cuda_image_alloc(
+    "cuda:0", batch, src_height, src_width, SWM_PACKED_IMAGE_FORMAT_RGB, &image);
+void *image_ptr = NULL;
+size_t image_pitch = 0;
+status = swm_cuda_image_ptr(image, &image_ptr, &image_pitch);
+/* Fill image_ptr from CUDA/NVIDIA code, then submit it. */
+status = swm_tdmpc2_reset_cuda_image(rt, image);
 status = swm_tdmpc2_reset_state_pixels(
     rt, state_f32, pixels_f32, batch, state_dim, image_size, image_size,
     SWM_PIXEL_LAYOUT_NCHW);
@@ -458,9 +481,11 @@ SwmLeWm *lewm = NULL;
 status = swm_lewm_load("/path/to/lewm-artifact", "cuda:0", "f32", &lewm);
 status = swm_lewm_reset_pixels(
     lewm, current_pixels_f32, batch, history_size, image_size, image_size);
+status = swm_lewm_reset_cuda_image_history(lewm, image, batch, history_size);
 status = swm_lewm_set_goal_pixels(
     lewm, goal_pixels_f32, batch, goal_frames, image_size, image_size);
 status = swm_lewm_plan_cem(lewm, cem_cfg, action_out, sequence_out, best_cost_out);
+swm_cuda_image_free(image);
 swm_lewm_free(lewm);
 ```
 
@@ -468,16 +493,22 @@ swm_lewm_free(lewm);
 statuses. The matching declarations live in
 `include/stable_worldmodel_candle.h`. `swm_tdmpc2_reset_pixels` expects f32
 tensors already resized and normalized for the model, with explicit NCHW or
-NHWC layout. `swm_tdmpc2_plan_icem` keeps its shifted warm-start sequence inside
+NHWC layout. `swm_tdmpc2_reset_cuda_image` and `swm_tdmpc2_reset_cuda_nv12`
+preprocess Rust-owned CUDA buffers using artifact preprocessing metadata before
+resetting the session. `swm_tdmpc2_plan_icem` keeps its shifted warm-start sequence inside
 the runtime handle; call `swm_tdmpc2_clear_icem_warm_start` when resetting an
 episode. `swm_lewm_reset_pixels` expects `[batch, time, 3, image_size,
-image_size]` f32 history tensors; set a goal with `swm_lewm_set_goal_pixels`
+image_size]` f32 history tensors; `swm_lewm_reset_cuda_image_history` and
+`swm_lewm_reset_cuda_nv12_history` take packed CUDA media batches shaped as
+`batch * time` frames and preprocess them into the same history tensor. Set a
+goal with `swm_lewm_set_goal_pixels` or a CUDA media goal-history entrypoint
 before calling a LeWM planner entrypoint.
 
-Latest local C ABI validation after adding TD-MPC2 pixel/iCEM and LeWM
-entrypoints, run on 2026-05-29:
+Latest local C ABI validation after adding CUDA media handles and reset
+entrypoints, run on 2026-06-01:
 
-- `cargo test --locked` passed.
+- `cargo check --locked --all-targets` passed.
+- `cargo test --locked --test ffi -- --nocapture` passed.
 - `cargo build --locked --release --lib` produced the release library.
 
 ## Source Layout

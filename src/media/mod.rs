@@ -7,7 +7,7 @@
 #[cfg(feature = "nvjpeg")]
 pub mod nvjpeg;
 
-use std::fmt;
+use std::{ffi::c_void, fmt};
 
 use candle::{
     CudaStorage, DType, Device, InplaceOp2, InplaceOp3, Layout, Result, Storage, Tensor,
@@ -82,6 +82,22 @@ impl PackedImageFormat {
     }
 }
 
+impl TryFrom<u32> for PackedImageFormat {
+    type Error = candle::Error;
+
+    fn try_from(value: u32) -> Result<Self> {
+        match value {
+            0 => Ok(Self::Rgb),
+            1 => Ok(Self::Bgr),
+            2 => Ok(Self::Rgba),
+            3 => Ok(Self::Bgra),
+            other => candle::bail!(
+                "unknown packed CUDA image format {other}; expected 0=RGB, 1=BGR, 2=RGBA, or 3=BGRA"
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Nv12ImageShape {
     pub batch: usize,
@@ -128,6 +144,22 @@ impl Nv12ColorSpace {
             Self::Bt709Video => 1,
             Self::Bt601Full => 2,
             Self::Bt709Full => 3,
+        }
+    }
+}
+
+impl TryFrom<u32> for Nv12ColorSpace {
+    type Error = candle::Error;
+
+    fn try_from(value: u32) -> Result<Self> {
+        match value {
+            0 => Ok(Self::Bt601Video),
+            1 => Ok(Self::Bt709Video),
+            2 => Ok(Self::Bt601Full),
+            3 => Ok(Self::Bt709Full),
+            other => candle::bail!(
+                "unknown NV12 color space {other}; expected 0=BT.601 video, 1=BT.709 video, 2=BT.601 full, or 3=BT.709 full"
+            ),
         }
     }
 }
@@ -963,6 +995,18 @@ pub fn packed_u8_tensor_from_host(
     )
 }
 
+pub fn packed_u8_tensor(shape: PackedImageShape, device: &Device) -> Result<Tensor> {
+    shape.validate()?;
+    if !device.is_cuda() {
+        candle::bail!("packed_u8_tensor requires a CUDA Candle device");
+    }
+    Tensor::zeros(
+        (shape.batch, shape.height, shape.width, shape.channels()),
+        DType::U8,
+        device,
+    )
+}
+
 pub fn nv12_tensors_from_host(
     y_plane: &[u8],
     uv_plane: &[u8],
@@ -996,6 +1040,44 @@ pub fn nv12_tensors_from_host(
         device,
     )?;
     Ok((y, uv))
+}
+
+pub fn nv12_tensors(shape: Nv12ImageShape, device: &Device) -> Result<(Tensor, Tensor)> {
+    shape.validate()?;
+    if !device.is_cuda() {
+        candle::bail!("nv12_tensors requires a CUDA Candle device");
+    }
+    let y = Tensor::zeros((shape.batch, shape.height, shape.width), DType::U8, device)?;
+    let uv = Tensor::zeros(
+        (shape.batch, shape.height / 2, shape.width / 2, 2),
+        DType::U8,
+        device,
+    )?;
+    Ok((y, uv))
+}
+
+pub fn cuda_u8_tensor_device_ptr(tensor: &Tensor) -> Result<*mut c_void> {
+    if !tensor.device().is_cuda() {
+        candle::bail!("CUDA media pointer query requires a CUDA Candle tensor");
+    }
+    if tensor.dtype() != DType::U8 {
+        candle::bail!(
+            "CUDA media pointer query requires U8 tensor, got {:?}",
+            tensor.dtype()
+        );
+    }
+    let (storage, layout) = tensor.storage_and_layout();
+    let Storage::Cuda(storage) = &*storage else {
+        candle::bail!("CUDA media pointer query requires CUDA storage");
+    };
+    let slice = storage.as_cuda_slice::<u8>()?;
+    let Some((start, end)) = layout.contiguous_offsets() else {
+        candle::bail!("CUDA media pointer query requires contiguous tensor layout");
+    };
+    let view = slice.slice(start..end);
+    let stream = storage.device.cuda_stream();
+    let (ptr, _record) = view.view_ptr(&stream);
+    Ok(ptr as usize as *mut c_void)
 }
 
 pub fn tensor_from_cuda_slice_f32(
