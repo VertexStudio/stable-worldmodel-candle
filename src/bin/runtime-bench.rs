@@ -1,4 +1,5 @@
 use std::{
+    ffi::CStr,
     process::Command,
     time::{Duration, Instant},
 };
@@ -8,6 +9,11 @@ use clap::{Parser, ValueEnum};
 use serde_json::json;
 use stable_worldmodel_candle::{
     checkpoint,
+    ffi::{
+        SwmCemPlanConfig, SwmStatus, SwmTdMpc2, swm_last_error_message,
+        swm_tdmpc2_actor_mean_action, swm_tdmpc2_plan_cem, swm_tdmpc2_rollout_actor_mean,
+        swm_tdmpc2_rollout_actor_sample,
+    },
     models::{
         lewm::{LeWm, LeWmConfig},
         tdmpc2::{TdMpc2, TdMpc2Config},
@@ -228,6 +234,19 @@ fn bench_tdmpc2(
     let mut session = TdMpc2Session::new(session_model, device.clone(), dtype);
     session.reset_state(&state)?;
 
+    let mut ffi_handle = SwmTdMpc2::synthetic_state_for_bench(
+        args.state_dim,
+        args.action_dim,
+        dtype,
+        device,
+        &state,
+    )?;
+    let mut ffi_action = vec![0f32; args.batch_size * args.action_dim];
+    let mut ffi_policy_actions = vec![0f32; args.batch_size * args.horizon * args.action_dim];
+    let mut ffi_policy_rewards = vec![0f32; args.batch_size * args.horizon];
+    let mut ffi_plan_sequence = vec![0f32; args.batch_size * args.horizon * args.action_dim];
+    let mut ffi_plan_cost = vec![0f32; args.batch_size];
+
     if args.samples < 2 {
         anyhow::bail!("TD-MPC2 planning benchmarks require --samples >= 2");
     }
@@ -254,6 +273,14 @@ fn bench_tdmpc2(
     icem_cfg.iterations = args.planner_iterations;
     icem_cfg.keep_elites = elites.min(args.samples);
     let mut icem = IcemPlanner::new(icem_cfg);
+    let ffi_cem_cfg = SwmCemPlanConfig {
+        horizon: args.horizon,
+        samples: args.samples,
+        elites,
+        iterations: args.planner_iterations,
+        init_std: 1.0,
+        min_std: 1e-3,
+    };
 
     Ok(vec![
         bench("encode", args, device, || {
@@ -282,9 +309,48 @@ fn bench_tdmpc2(
             model.rollout_actor_sampled(&z, args.horizon, args.samples)?;
             Ok(())
         })?,
+        bench("ffi_actor_mean", args, device, || {
+            let status =
+                unsafe { swm_tdmpc2_actor_mean_action(&mut ffi_handle, ffi_action.as_mut_ptr()) };
+            ensure_ffi_status(status)
+        })?,
+        bench("ffi_policy_roll", args, device, || {
+            let status = unsafe {
+                swm_tdmpc2_rollout_actor_mean(
+                    &mut ffi_handle,
+                    args.horizon,
+                    ffi_policy_actions.as_mut_ptr(),
+                    ffi_policy_rewards.as_mut_ptr(),
+                )
+            };
+            ensure_ffi_status(status)
+        })?,
+        bench("ffi_policy_samp", args, device, || {
+            let status = unsafe {
+                swm_tdmpc2_rollout_actor_sample(
+                    &mut ffi_handle,
+                    args.horizon,
+                    args.samples,
+                    ffi_policy_actions.as_mut_ptr(),
+                )
+            };
+            ensure_ffi_status(status)
+        })?,
         bench("plan_cem", args, device, || {
             cem.plan(&session)?;
             Ok(())
+        })?,
+        bench("ffi_plan_cem", args, device, || {
+            let status = unsafe {
+                swm_tdmpc2_plan_cem(
+                    &mut ffi_handle,
+                    ffi_cem_cfg,
+                    ffi_action.as_mut_ptr(),
+                    ffi_plan_sequence.as_mut_ptr(),
+                    ffi_plan_cost.as_mut_ptr(),
+                )
+            };
+            ensure_ffi_status(status)
         })?,
         bench("plan_mppi", args, device, || {
             mppi.plan(&session)?;
@@ -295,6 +361,21 @@ fn bench_tdmpc2(
             Ok(())
         })?,
     ])
+}
+
+fn ensure_ffi_status(status: SwmStatus) -> anyhow::Result<()> {
+    if status == SwmStatus::Ok {
+        return Ok(());
+    }
+    let message = unsafe {
+        let ptr = swm_last_error_message();
+        if ptr.is_null() {
+            "no C ABI error message".to_string()
+        } else {
+            CStr::from_ptr(ptr).to_string_lossy().into_owned()
+        }
+    };
+    anyhow::bail!("C ABI call failed with {status:?}: {message}")
 }
 
 fn elite_count(args: &Args) -> usize {

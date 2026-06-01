@@ -154,6 +154,33 @@ pub struct SwmTdMpc2 {
     icem_planner: Option<IcemPlanner>,
 }
 
+impl SwmTdMpc2 {
+    #[doc(hidden)]
+    pub fn synthetic_state_for_bench(
+        state_dim: usize,
+        action_dim: usize,
+        dtype: DType,
+        device: &Device,
+        state: &Tensor,
+    ) -> Result<Self, candle::Error> {
+        let model = TdMpc2::new(
+            TdMpc2Config::state_only(state_dim, action_dim),
+            checkpoint::empty_var_builder(dtype, device),
+        )?;
+        let mut session = TdMpc2Session::new(model, device.clone(), dtype);
+        session.reset_state(state)?;
+        Ok(Self {
+            session,
+            state_dim: Some(state_dim),
+            image_size: None,
+            image_preprocess: None,
+            action_dim,
+            action_bounds: ActionBounds::symmetric(action_dim, 1.0),
+            icem_planner: None,
+        })
+    }
+}
+
 pub struct SwmLeWm {
     session: LeWmSession,
     goal_emb: Option<Tensor>,

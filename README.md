@@ -400,9 +400,9 @@ The benchmark synchronizes the selected Candle device around timed sections, so
 CUDA timings include queued device work rather than just launch overhead.
 Current sections cover synthetic encode, dynamics where applicable,
 rollout or scoring, TD-MPC2 actor-mean and sampled policy rollouts, an
-end-to-end synthetic path, and TD-MPC2 planner latency for CEM, MPPI, and iCEM.
-Planner sections reuse a reset `TdMpc2Session`, so they measure the hot MPC loop
-after observation encoding has been cached.
+end-to-end synthetic path, TD-MPC2 C ABI call rows, and TD-MPC2 planner latency
+for CEM, MPPI, and iCEM. Planner sections reuse a reset `TdMpc2Session`, so
+they measure the hot MPC loop after observation encoding has been cached.
 
 Latest local TD-MPC2 runtime validation after adding actor-mean policy rollout,
 run on 2026-06-01:
@@ -411,9 +411,10 @@ run on 2026-06-01:
 - `cargo check --locked --all-targets` passed.
 - CUDA smoke completed with
   `cargo run --locked --bin runtime-bench -- --model td-mpc2 --device cuda --warmup 0 --iters 1 --samples 4 --horizon 2 --planner-iterations 1`.
-  This debug smoke emitted `policy_rollout`, `policy_sample`, `plan_cem`,
-  `plan_mppi`, and `plan_icem` sections; use the release benchmark commands
-  above for latency baselines.
+  This debug smoke emitted `policy_rollout`, `policy_sample`,
+  `ffi_actor_mean`, `ffi_policy_roll`, `ffi_policy_samp`, `plan_cem`,
+  `ffi_plan_cem`, `plan_mppi`, and `plan_icem` sections; use the release
+  benchmark commands above for latency baselines.
 
 ## Runtime Sessions
 
@@ -615,5 +616,5 @@ checkpoint plus config.
   concurrent planners.
 - Add planner buffer reuse/preallocation for lower steady-state allocation cost.
 - Add safetensors export guidance for deployments that prefer mmap loading.
-- Add C ABI overhead benchmarks for TD-MPC2 and LeWM deployment calls.
+- Add LeWM C ABI overhead benchmark rows.
 - Add additional sibling model backends starting from the simplest production inference path for each model.
