@@ -462,8 +462,9 @@ rows, run on 2026-06-01:
   `cargo run --locked --bin runtime-bench -- --model td-mpc2 --device cuda --warmup 0 --iters 1 --samples 4 --horizon 2 --planner-iterations 1`.
   This debug smoke emitted `media_packed`, `media_nv12`, `policy_rollout`,
   `policy_sample`, `ffi_actor_mean`, `ffi_policy_roll`, `ffi_policy_samp`,
-  `plan_cem`, `ffi_plan_cem`, `plan_mppi`, and `plan_icem` sections; use the
-  release benchmark commands above for latency baselines.
+  `plan_cem`, `ffi_plan_cem`, `ffi_plan_mppi`, `ffi_plan_icem`, `plan_mppi`,
+  and `plan_icem` sections; use the release benchmark commands above for
+  latency baselines.
 - LeWM CUDA smoke completed with
   `cargo run --locked --bin runtime-bench -- --model le-wm --device cuda --warmup 0 --iters 1 --samples 2 --horizon 3 --planner-iterations 1 --action-dim 2`.
   This debug smoke emitted `media_packed`, `media_nv12`, `ffi_plan_cem`,

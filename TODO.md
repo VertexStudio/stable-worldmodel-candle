@@ -292,8 +292,8 @@ overhead.
 - `runtime-bench --model td-mpc2` reports CEM, MPPI, and iCEM planner latency
   using the same session/scorer path as deployment code.
 - `runtime-bench --model td-mpc2` reports representative TD-MPC2 C ABI rows for
-  actor mean action, actor policy rollout, sampled policy rollout, and CEM
-  planning.
+  actor mean action, actor policy rollout, sampled policy rollout, and
+  CEM/MPPI/iCEM planning.
 - `runtime-bench --model le-wm` reports representative LeWM C ABI planner rows
   for CEM, MPPI, and iCEM.
 - `runtime-bench` reports `media_packed` and `media_nv12` rows so image/video

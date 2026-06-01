@@ -12,8 +12,8 @@ use stable_worldmodel_candle::{
     ffi::{
         SwmCemPlanConfig, SwmIcemPlanConfig, SwmLeWm, SwmMppiPlanConfig, SwmStatus, SwmTdMpc2,
         swm_last_error_message, swm_lewm_plan_cem, swm_lewm_plan_icem, swm_lewm_plan_mppi,
-        swm_tdmpc2_actor_mean_action, swm_tdmpc2_plan_cem, swm_tdmpc2_rollout_actor_mean,
-        swm_tdmpc2_rollout_actor_sample,
+        swm_tdmpc2_actor_mean_action, swm_tdmpc2_plan_cem, swm_tdmpc2_plan_icem,
+        swm_tdmpc2_plan_mppi, swm_tdmpc2_rollout_actor_mean, swm_tdmpc2_rollout_actor_sample,
     },
     media::{
         ImagePreprocess, ImagePreprocessor, Nv12ColorSpace, Nv12ImageShape, Nv12Preprocessor,
@@ -238,7 +238,6 @@ fn bench_lewm(
         init_std: 1.0,
         min_std: 1e-3,
     };
-
     Ok(vec![
         bench("media_packed", args, device, || {
             packed_preprocessor.preprocess_packed_u8(&packed_pixels)?;
@@ -407,6 +406,22 @@ fn bench_tdmpc2(
         init_std: 1.0,
         min_std: 1e-3,
     };
+    let ffi_mppi_cfg = SwmMppiPlanConfig {
+        horizon: args.horizon,
+        samples: args.samples,
+        iterations: args.planner_iterations,
+        noise_std: 1.0,
+        temperature: 1.0,
+    };
+    let ffi_icem_cfg = SwmIcemPlanConfig {
+        horizon: args.horizon,
+        samples: args.samples,
+        elites,
+        keep_elites: elites.min(args.samples),
+        iterations: args.planner_iterations,
+        init_std: 1.0,
+        min_std: 1e-3,
+    };
 
     Ok(vec![
         bench("media_packed", args, device, || {
@@ -479,6 +494,30 @@ fn bench_tdmpc2(
                 swm_tdmpc2_plan_cem(
                     &mut ffi_handle,
                     ffi_cem_cfg,
+                    ffi_action.as_mut_ptr(),
+                    ffi_plan_sequence.as_mut_ptr(),
+                    ffi_plan_cost.as_mut_ptr(),
+                )
+            };
+            ensure_ffi_status(status)
+        })?,
+        bench("ffi_plan_mppi", args, device, || {
+            let status = unsafe {
+                swm_tdmpc2_plan_mppi(
+                    &mut ffi_handle,
+                    ffi_mppi_cfg,
+                    ffi_action.as_mut_ptr(),
+                    ffi_plan_sequence.as_mut_ptr(),
+                    ffi_plan_cost.as_mut_ptr(),
+                )
+            };
+            ensure_ffi_status(status)
+        })?,
+        bench("ffi_plan_icem", args, device, || {
+            let status = unsafe {
+                swm_tdmpc2_plan_icem(
+                    &mut ffi_handle,
+                    ffi_icem_cfg,
                     ffi_action.as_mut_ptr(),
                     ffi_plan_sequence.as_mut_ptr(),
                     ffi_plan_cost.as_mut_ptr(),
