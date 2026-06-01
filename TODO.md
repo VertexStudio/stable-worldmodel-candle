@@ -291,13 +291,15 @@ overhead.
   for CEM, MPPI, and iCEM.
 - TD-MPC2 sampled actor rollout uses explicit CUDA noise tensors for parity and
   generated Candle CUDA noise for deployment runs.
-- Planner seeded sampling now resets Candle's selected-device CUDA RNG and keeps
-  candidate noise generation inside Candle CUDA tensors.
+- Planner seeded sampling now uses planner-owned cuRAND generators on the Candle
+  CUDA stream, reserves non-overlapping offset ranges per `plan` call, and keeps
+  candidate noise generation inside CUDA tensors.
 - Deadline handling is implemented for zero-completed-iteration cases: CEM and
   MPPI use a configured action, while iCEM prefers its warm-start sequence
   before using the configured action. `PlanResult` reports which path was used.
-- Planner configs expose a seed for deterministic CUDA RNG sampling while
-  leaving deployment defaults on the selected device RNG stream.
+- Planner configs expose a seed for deterministic CUDA RNG sampling; fresh
+  planners replay from offset zero, persistent planners advance across control
+  steps, and `reset_rng_sequence()` replays from the beginning.
 
 **Done When**
 

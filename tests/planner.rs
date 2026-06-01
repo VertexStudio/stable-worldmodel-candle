@@ -6,8 +6,8 @@ use stable_worldmodel_candle::{
     checkpoint,
     models::tdmpc2::{TdMpc2, TdMpc2Config},
     planner::{
-        ActionBounds, CemConfig, CemPlanner, IcemConfig, IcemPlanner, MppiConfig, MppiPlanner,
-        PlanFallback,
+        ActionBounds, CandidateScorer, CemConfig, CemPlanner, IcemConfig, IcemPlanner, MppiConfig,
+        MppiPlanner, PlanFallback,
     },
     session::TdMpc2Session,
 };
@@ -284,6 +284,92 @@ fn icem_seed_replays_same_candidate_sequence() -> anyhow::Result<()> {
 }
 
 #[test]
+fn cem_seeded_planner_advances_cuda_rng_offset() -> anyhow::Result<()> {
+    let device = Device::new_cuda(0)?;
+    let scorer = ZeroScorer::new(device, DType::F32, 2);
+    let mut cfg = CemConfig::new(3, 8, 3, 4);
+    cfg.iterations = 1;
+    cfg.seed = Some(42);
+    let planner = CemPlanner::new(cfg);
+
+    let first = planner.plan(&scorer)?;
+    let first_offset = planner.rng_offset();
+    let second = planner.plan(&scorer)?;
+
+    assert_ne!(
+        first.sequence.to_vec3::<f32>()?,
+        second.sequence.to_vec3::<f32>()?
+    );
+    assert!(planner.rng_offset() > first_offset);
+
+    planner.reset_rng_sequence();
+    let replay = planner.plan(&scorer)?;
+    assert_eq!(
+        first.sequence.to_vec3::<f32>()?,
+        replay.sequence.to_vec3::<f32>()?
+    );
+    Ok(())
+}
+
+#[test]
+fn mppi_seeded_planner_advances_cuda_rng_offset() -> anyhow::Result<()> {
+    let device = Device::new_cuda(0)?;
+    let scorer = ZeroScorer::new(device, DType::F32, 2);
+    let mut cfg = MppiConfig::new(3, 8, 4);
+    cfg.iterations = 1;
+    cfg.seed = Some(42);
+    let planner = MppiPlanner::new(cfg);
+
+    let first = planner.plan(&scorer)?;
+    let first_offset = planner.rng_offset();
+    let second = planner.plan(&scorer)?;
+
+    assert_ne!(
+        first.sequence.to_vec3::<f32>()?,
+        second.sequence.to_vec3::<f32>()?
+    );
+    assert!(planner.rng_offset() > first_offset);
+
+    planner.reset_rng_sequence();
+    let replay = planner.plan(&scorer)?;
+    assert_eq!(
+        first.sequence.to_vec3::<f32>()?,
+        replay.sequence.to_vec3::<f32>()?
+    );
+    Ok(())
+}
+
+#[test]
+fn icem_seeded_planner_advances_cuda_rng_offset() -> anyhow::Result<()> {
+    let device = Device::new_cuda(0)?;
+    let scorer = ZeroScorer::new(device, DType::F32, 2);
+    let mut cfg = IcemConfig::new(3, 8, 3, 4);
+    cfg.keep_elites = 2;
+    cfg.iterations = 1;
+    cfg.seed = Some(42);
+    let mut planner = IcemPlanner::new(cfg);
+
+    let first = planner.plan(&scorer)?;
+    let first_offset = planner.rng_offset();
+    let second = planner.plan(&scorer)?;
+
+    assert_ne!(
+        first.sequence.to_vec3::<f32>()?,
+        second.sequence.to_vec3::<f32>()?
+    );
+    assert!(planner.rng_offset() > first_offset);
+
+    planner.reset_rng_sequence();
+    planner.clear_warm_start();
+    let replay = planner.plan(&scorer)?;
+    assert_eq!(
+        first.sequence.to_vec3::<f32>()?,
+        replay.sequence.to_vec3::<f32>()?
+    );
+    Ok(())
+}
+
+#[test]
 fn mppi_returns_configured_fallback_when_deadline_prevents_iteration() -> anyhow::Result<()> {
     let device = Device::new_cuda(0)?;
     let dtype = DType::F32;
@@ -350,4 +436,40 @@ fn icem_returns_warm_start_when_deadline_prevents_iteration() -> anyhow::Result<
 
 fn empty_vb(dtype: DType, device: &Device) -> VarBuilder<'static> {
     checkpoint::empty_var_builder(dtype, device)
+}
+
+struct ZeroScorer {
+    device: Device,
+    dtype: DType,
+    batch: usize,
+}
+
+impl ZeroScorer {
+    fn new(device: Device, dtype: DType, batch: usize) -> Self {
+        Self {
+            device,
+            dtype,
+            batch,
+        }
+    }
+}
+
+impl CandidateScorer for ZeroScorer {
+    fn device(&self) -> &Device {
+        &self.device
+    }
+
+    fn dtype(&self) -> DType {
+        self.dtype
+    }
+
+    fn batch_size(&self) -> Option<usize> {
+        Some(self.batch)
+    }
+
+    fn score_candidates(&self, action_candidates: &Tensor) -> candle::Result<Tensor> {
+        let batch = action_candidates.dim(0)?;
+        let samples = action_candidates.dim(1)?;
+        Tensor::zeros((batch, samples), self.dtype, &self.device)
+    }
 }

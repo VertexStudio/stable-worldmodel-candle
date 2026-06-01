@@ -484,9 +484,11 @@ deadline expires before any iteration completes, CEM/MPPI can return a
 configured action and iCEM first tries its previous warm-start sequence.
 `PlanResult` records whether the selected action came from normal planning,
 warm-start, or configured-action deadline handling. Planner configs also accept
-a `seed`; when set, the planner resets Candle's selected-device CUDA RNG before
-sampling candidate noise. Leave `seed` unset for continuous device RNG sampling
-in deployment.
+a `seed`; when set, the planner owns a cuRAND generator on the Candle CUDA
+stream and reserves a non-overlapping offset range for each `plan` call. Fresh
+planners replay exactly from the same seed, persistent planners advance across
+control steps, and `reset_rng_sequence()` returns the planner to offset zero.
+Leave `seed` unset for continuous device RNG sampling in deployment.
 
 Latest local planner deadline and seeded-sampling validation, run on
 2026-06-01:
@@ -495,7 +497,8 @@ Latest local planner deadline and seeded-sampling validation, run on
 - `cargo check --locked --all-targets` passed.
 - Deadline tests cover CEM/MPPI configured actions and iCEM warm-start behavior
   without requiring the scorer/session to be reset; seeded CEM/MPPI/iCEM tests
-  verify deterministic replay of candidate sampling.
+  verify deterministic replay of candidate sampling, and cuRAND offset tests
+  verify persistent planners advance then replay after `reset_rng_sequence()`.
 
 ## C ABI
 
@@ -636,7 +639,5 @@ checkpoint plus config.
 - Add compact fixture integration tests once small public test weights are available.
 - Add NVDECODE parser callbacks and frame mapping that write decoded frames into
   Rust-owned CUDA NV12 buffers.
-- Add per-session CUDA RNG stream handles and offsets for independent
-  concurrent planners.
 - Add planner buffer reuse/preallocation for lower steady-state allocation cost.
 - Add additional sibling model backends starting from the simplest production inference path for each model.

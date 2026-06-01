@@ -1,6 +1,12 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant},
+};
 
-use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle::{
+    CudaStorage, DType, Device, IndexOp, Result, Storage, Tensor, cuda_backend::cudarc,
+    op::BackpropOp,
+};
 use candle_nn::ops;
 
 use crate::session::{LeWmSession, TdMpc2Session};
@@ -339,15 +345,27 @@ pub struct PlanResult {
 #[derive(Debug, Clone)]
 pub struct CemPlanner {
     config: CemConfig,
+    rng: PlannerRng,
 }
 
 impl CemPlanner {
     pub fn new(config: CemConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            rng: PlannerRng::new(),
+        }
     }
 
     pub fn config(&self) -> &CemConfig {
         &self.config
+    }
+
+    pub fn reset_rng_sequence(&self) {
+        self.rng.reset();
+    }
+
+    pub fn rng_offset(&self) -> u64 {
+        self.rng.offset()
     }
 
     pub fn plan<S: CandidateScorer>(&self, scorer: &S) -> Result<PlanResult> {
@@ -357,7 +375,17 @@ impl CemPlanner {
         let dtype = scorer.dtype();
         let cfg = &self.config;
         let batch = scorer.batch_size().unwrap_or(1);
-        seed_device_if_requested(device, cfg.seed)?;
+        let mut sampler = self.rng.begin_plan(
+            device,
+            cfg.seed,
+            normal_draw_reservation(
+                batch,
+                cfg.samples,
+                cfg.horizon,
+                cfg.action_dim,
+                cfg.iterations,
+            )?,
+        )?;
 
         let mut mean = Tensor::zeros((batch, cfg.horizon, cfg.action_dim), dtype, device)?;
         let mut std = Tensor::ones((batch, cfg.horizon, cfg.action_dim), dtype, device)?
@@ -385,8 +413,15 @@ impl CemPlanner {
                 break;
             }
 
-            let candidates =
-                sample_candidates(&mean, &std, cfg.samples, &cfg.action_bounds, dtype, device)?;
+            let candidates = sample_candidates(
+                &mean,
+                &std,
+                cfg.samples,
+                &cfg.action_bounds,
+                dtype,
+                device,
+                &mut sampler,
+            )?;
             let scores = scorer.score_candidates(&candidates)?;
             validate_scores_shape(&scores, batch, cfg.samples)?;
             let elites = select_elites(&candidates, &scores, cfg.elites)?;
@@ -426,15 +461,27 @@ impl CemPlanner {
 #[derive(Debug, Clone)]
 pub struct MppiPlanner {
     config: MppiConfig,
+    rng: PlannerRng,
 }
 
 impl MppiPlanner {
     pub fn new(config: MppiConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            rng: PlannerRng::new(),
+        }
     }
 
     pub fn config(&self) -> &MppiConfig {
         &self.config
+    }
+
+    pub fn reset_rng_sequence(&self) {
+        self.rng.reset();
+    }
+
+    pub fn rng_offset(&self) -> u64 {
+        self.rng.offset()
     }
 
     pub fn plan<S: CandidateScorer>(&self, scorer: &S) -> Result<PlanResult> {
@@ -444,7 +491,17 @@ impl MppiPlanner {
         let dtype = scorer.dtype();
         let cfg = &self.config;
         let batch = scorer.batch_size().unwrap_or(1);
-        seed_device_if_requested(device, cfg.seed)?;
+        let mut sampler = self.rng.begin_plan(
+            device,
+            cfg.seed,
+            normal_draw_reservation(
+                batch,
+                cfg.samples,
+                cfg.horizon,
+                cfg.action_dim,
+                cfg.iterations,
+            )?,
+        )?;
 
         let mut mean = Tensor::zeros((batch, cfg.horizon, cfg.action_dim), dtype, device)?;
         let std = Tensor::ones((batch, cfg.horizon, cfg.action_dim), dtype, device)?
@@ -471,8 +528,15 @@ impl MppiPlanner {
                 break;
             }
 
-            let candidates =
-                sample_candidates(&mean, &std, cfg.samples, &cfg.action_bounds, dtype, device)?;
+            let candidates = sample_candidates(
+                &mean,
+                &std,
+                cfg.samples,
+                &cfg.action_bounds,
+                dtype,
+                device,
+                &mut sampler,
+            )?;
             let scores = scorer.score_candidates(&candidates)?;
             validate_scores_shape(&scores, batch, cfg.samples)?;
             mean = mppi_weighted_sequence(&candidates, &scores, cfg.temperature)?;
@@ -508,6 +572,7 @@ impl MppiPlanner {
 pub struct IcemPlanner {
     config: IcemConfig,
     warm_start: Option<Tensor>,
+    rng: PlannerRng,
 }
 
 impl IcemPlanner {
@@ -515,6 +580,7 @@ impl IcemPlanner {
         Self {
             config,
             warm_start: None,
+            rng: PlannerRng::new(),
         }
     }
 
@@ -530,6 +596,14 @@ impl IcemPlanner {
         self.warm_start = None;
     }
 
+    pub fn reset_rng_sequence(&self) {
+        self.rng.reset();
+    }
+
+    pub fn rng_offset(&self) -> u64 {
+        self.rng.offset()
+    }
+
     pub fn set_warm_start_sequence(&mut self, sequence: Tensor) {
         self.warm_start = Some(sequence);
     }
@@ -541,7 +615,17 @@ impl IcemPlanner {
         let dtype = scorer.dtype();
         let cfg = &self.config;
         let batch = scorer.batch_size().unwrap_or(1);
-        seed_device_if_requested(device, cfg.seed)?;
+        let mut sampler = self.rng.begin_plan(
+            device,
+            cfg.seed,
+            normal_draw_reservation(
+                batch,
+                cfg.samples,
+                cfg.horizon,
+                cfg.action_dim,
+                cfg.iterations,
+            )?,
+        )?;
 
         let mut mean = self.initial_mean(batch, dtype, device)?;
         let mut std = Tensor::ones((batch, cfg.horizon, cfg.action_dim), dtype, device)?
@@ -579,8 +663,15 @@ impl IcemPlanner {
                 break;
             }
 
-            let sampled =
-                sample_candidates(&mean, &std, cfg.samples, &cfg.action_bounds, dtype, device)?;
+            let sampled = sample_candidates(
+                &mean,
+                &std,
+                cfg.samples,
+                &cfg.action_bounds,
+                dtype,
+                device,
+                &mut sampler,
+            )?;
             let candidates = match carried_elites.as_ref() {
                 Some(elites) => Tensor::cat(&[&sampled, elites], 1)?,
                 None => sampled,
@@ -762,13 +853,6 @@ fn fallback_plan_result(
     })
 }
 
-fn seed_device_if_requested(device: &Device, seed: Option<u64>) -> Result<()> {
-    if let Some(seed) = seed {
-        device.set_seed(seed)?;
-    }
-    Ok(())
-}
-
 fn sample_candidates(
     mean: &Tensor,
     std: &Tensor,
@@ -776,23 +860,152 @@ fn sample_candidates(
     bounds: &ActionBounds,
     dtype: DType,
     device: &Device,
+    sampler: &mut PlanSampler,
 ) -> Result<Tensor> {
     let batch = mean.dim(0)?;
     let (_, horizon, action_dim) = mean.dims3()?;
     let shape = (batch, samples, horizon, action_dim);
-    let noise = sample_standard_normal(shape, dtype, device)?;
+    let noise = sampler.standard_normal(shape, dtype, device)?;
     let mean = mean.unsqueeze(1)?.broadcast_as(shape)?;
     let std = std.unsqueeze(1)?.broadcast_as(shape)?;
     let candidates = mean.broadcast_add(&noise.broadcast_mul(&std)?)?;
     clamp_actions(&candidates, bounds, dtype, device)
 }
 
-fn sample_standard_normal(
-    shape: (usize, usize, usize, usize),
-    dtype: DType,
-    device: &Device,
-) -> Result<Tensor> {
-    Tensor::randn(0f32, 1f32, shape, device)?.to_dtype(dtype)
+#[derive(Debug)]
+struct PlannerRng {
+    next_offset: AtomicU64,
+}
+
+impl PlannerRng {
+    fn new() -> Self {
+        Self {
+            next_offset: AtomicU64::new(0),
+        }
+    }
+
+    fn reset(&self) {
+        self.next_offset.store(0, Ordering::SeqCst);
+    }
+
+    fn offset(&self) -> u64 {
+        self.next_offset.load(Ordering::SeqCst)
+    }
+
+    fn begin_plan(
+        &self,
+        device: &Device,
+        seed: Option<u64>,
+        reserved_draws: u64,
+    ) -> Result<PlanSampler> {
+        let Some(seed) = seed else {
+            return Ok(PlanSampler::Device);
+        };
+        let offset = self.reserve_offset(reserved_draws)?;
+        Ok(PlanSampler::Cuda(CudaNormalSampler::new(
+            seed, offset, device,
+        )?))
+    }
+
+    fn reserve_offset(&self, reserved_draws: u64) -> Result<u64> {
+        let reserved_draws = reserved_draws.max(1);
+        self.next_offset
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                current.checked_add(reserved_draws)
+            })
+            .map_err(|_| candle::Error::Msg("planner CUDA RNG offset overflowed".to_string()))
+    }
+}
+
+impl Clone for PlannerRng {
+    fn clone(&self) -> Self {
+        Self {
+            next_offset: AtomicU64::new(self.offset()),
+        }
+    }
+}
+
+enum PlanSampler {
+    Device,
+    Cuda(CudaNormalSampler),
+}
+
+impl PlanSampler {
+    fn standard_normal(
+        &mut self,
+        shape: (usize, usize, usize, usize),
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Tensor> {
+        match self {
+            Self::Device => Tensor::randn(0f32, 1f32, shape, device)?.to_dtype(dtype),
+            Self::Cuda(sampler) => sampler.standard_normal(shape, dtype),
+        }
+    }
+}
+
+struct CudaNormalSampler {
+    rng: cudarc::curand::CudaRng,
+    device: candle::CudaDevice,
+}
+
+impl CudaNormalSampler {
+    fn new(seed: u64, offset: u64, device: &Device) -> Result<Self> {
+        let cuda = device.as_cuda_device()?.clone();
+        let mut rng =
+            cudarc::curand::CudaRng::new(seed, cuda.cuda_stream()).map_err(candle::Error::wrap)?;
+        rng.set_offset(offset).map_err(candle::Error::wrap)?;
+        Ok(Self { rng, device: cuda })
+    }
+
+    fn standard_normal(
+        &mut self,
+        shape: (usize, usize, usize, usize),
+        dtype: DType,
+    ) -> Result<Tensor> {
+        let elem_count = shape
+            .0
+            .checked_mul(shape.1)
+            .and_then(|v| v.checked_mul(shape.2))
+            .and_then(|v| v.checked_mul(shape.3))
+            .ok_or_else(|| candle::Error::Msg("planner CUDA RNG shape overflowed".to_string()))?;
+        let elem_count = round_curand_normal_count(elem_count)?;
+        let mut data = unsafe { self.device.alloc::<f32>(elem_count)? };
+        self.rng
+            .fill_with_normal(&mut data, 0f32, 1f32)
+            .map_err(candle::Error::wrap)?;
+        let storage = CudaStorage::wrap_cuda_slice(data, self.device.clone());
+        Tensor::from_storage(Storage::Cuda(storage), shape, BackpropOp::none(), false)
+            .to_dtype(dtype)
+    }
+}
+
+fn normal_draw_reservation(
+    batch: usize,
+    samples: usize,
+    horizon: usize,
+    action_dim: usize,
+    iterations: usize,
+) -> Result<u64> {
+    let per_iteration = batch
+        .checked_mul(samples)
+        .and_then(|v| v.checked_mul(horizon))
+        .and_then(|v| v.checked_mul(action_dim))
+        .ok_or_else(|| candle::Error::Msg("planner CUDA RNG shape overflowed".to_string()))?;
+    let per_iteration = round_curand_normal_count(per_iteration)? as u64;
+    per_iteration
+        .checked_mul(iterations as u64)
+        .ok_or_else(|| candle::Error::Msg("planner CUDA RNG offset overflowed".to_string()))
+}
+
+fn round_curand_normal_count(count: usize) -> Result<usize> {
+    if count % 2 == 0 {
+        Ok(count)
+    } else {
+        count
+            .checked_add(1)
+            .ok_or_else(|| candle::Error::Msg("planner CUDA RNG shape overflowed".to_string()))
+    }
 }
 
 fn mppi_weighted_sequence(
