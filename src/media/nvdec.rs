@@ -1,14 +1,26 @@
-//! NVIDIA Video Decoder capability queries.
+//! NVIDIA Video Decoder capability queries and CUDA NV12 decode sessions.
 //!
-//! This module binds the minimal NVDECODE surface needed before creating full
-//! decoder sessions: device-scoped capability checks through `libnvcuvid`.
+//! This module binds the NVDECODE surface used by the runtime: device-scoped
+//! capability checks, decoder/parser lifecycle, packet parsing, frame mapping,
+//! and CUDA-side copies into Candle-compatible NV12 tensors.
 
 use std::{
-    ffi::{c_int, c_short, c_uchar, c_uint, c_ulong, c_ushort, c_void},
-    ptr,
+    ffi::{c_int, c_longlong, c_short, c_uchar, c_uint, c_ulong, c_ulonglong, c_ushort, c_void},
+    fmt, ptr,
 };
 
-use candle::{Device, Result, cuda::WrapErr};
+use candle::{
+    Device, Result,
+    cuda::{
+        CudaDevice, WrapErr,
+        cudarc::{
+            driver::{LaunchConfig, PushKernelArg},
+            nvrtc,
+        },
+    },
+};
+
+use super::{Nv12ImageShape, cuda_u8_tensor_device_ptr, validate_nv12_tensors};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NvDecCodec {
@@ -294,6 +306,10 @@ impl NvDecDecoder {
     pub fn config(&self) -> NvDecDecoderConfig {
         self.config
     }
+
+    fn raw_decoder(&self) -> CuVideoDecoder {
+        self.decoder
+    }
 }
 
 impl Drop for NvDecDecoder {
@@ -363,6 +379,328 @@ pub fn query_caps(
     })
 }
 
+#[derive(Debug)]
+pub struct NvDecSession {
+    decoder: NvDecDecoder,
+    parser: CuVideoParser,
+    state: Box<NvDecParserState>,
+}
+
+impl NvDecSession {
+    pub fn new_nv12(device: &Device, config: NvDecDecoderConfig) -> Result<Self> {
+        let decoder = NvDecDecoder::new_nv12(device, config)?;
+        let cuda = device.as_cuda_device()?.clone();
+        let mut state = Box::new(NvDecParserState::new(decoder.raw_decoder(), cuda, config));
+
+        let mut params = CuvidParserParams {
+            codec_type: config.codec.raw(),
+            max_num_decode_surfaces: config.decode_surfaces as c_uint,
+            clock_rate: 1000,
+            error_threshold: 100,
+            max_display_delay: 0,
+            annexb_and_reserved: 1,
+            reserved1: [0; 4],
+            user_data: state.as_mut() as *mut NvDecParserState as *mut c_void,
+            sequence_callback: Some(nvdec_sequence_callback),
+            decode_picture_callback: Some(nvdec_decode_picture_callback),
+            display_picture_callback: Some(nvdec_display_picture_callback),
+            operating_point_callback: None,
+            sei_message_callback: None,
+            reserved2: [ptr::null_mut(); 5],
+            ext_video_info: ptr::null_mut(),
+        };
+        let mut parser = ptr::null_mut();
+        check_cuvid(
+            unsafe {
+                cuvidCreateVideoParser(
+                    &mut parser as *mut CuVideoParser,
+                    &mut params as *mut CuvidParserParams,
+                )
+            },
+            "cuvidCreateVideoParser",
+        )?;
+
+        Ok(Self {
+            decoder,
+            parser,
+            state,
+        })
+    }
+
+    pub fn config(&self) -> NvDecDecoderConfig {
+        self.decoder.config()
+    }
+
+    pub fn decode_annexb_to_nv12(
+        &mut self,
+        encoded: &[u8],
+        y_plane: &candle::Tensor,
+        uv_plane: &candle::Tensor,
+    ) -> Result<usize> {
+        if encoded.is_empty() {
+            candle::bail!("NVDECODE encoded packet is empty");
+        }
+        let shape = Nv12ImageShape::new(1, self.config().height, self.config().width);
+        validate_nv12_tensors(y_plane, uv_plane, shape)?;
+        let y_ptr = cuda_u8_tensor_device_ptr(y_plane)? as usize as u64;
+        let uv_ptr = cuda_u8_tensor_device_ptr(uv_plane)? as usize as u64;
+        self.state.begin_decode(Nv12DecodeTarget {
+            y_ptr,
+            uv_ptr,
+            width: shape.width,
+            height: shape.height,
+        });
+
+        let mut packet = CuvidSourceDataPacket {
+            flags: CUVID_PKT_ENDOFPICTURE as c_ulong,
+            payload_size: encoded.len() as c_ulong,
+            payload: encoded.as_ptr(),
+            timestamp: 0,
+        };
+        let parse_result = check_cuvid(
+            unsafe { cuvidParseVideoData(self.parser, &mut packet as *mut CuvidSourceDataPacket) },
+            "cuvidParseVideoData",
+        );
+        let frames = self.state.finish_decode()?;
+        parse_result?;
+        Ok(frames)
+    }
+}
+
+impl Drop for NvDecSession {
+    fn drop(&mut self) {
+        if !self.parser.is_null() {
+            unsafe {
+                cuvidDestroyVideoParser(self.parser);
+            }
+            self.parser = ptr::null_mut();
+        }
+    }
+}
+
+#[derive(Debug)]
+struct NvDecParserState {
+    decoder: CuVideoDecoder,
+    device: CudaDevice,
+    config: NvDecDecoderConfig,
+    target: Option<Nv12DecodeTarget>,
+    frames_decoded: usize,
+    error: Option<String>,
+}
+
+impl NvDecParserState {
+    fn new(decoder: CuVideoDecoder, device: CudaDevice, config: NvDecDecoderConfig) -> Self {
+        Self {
+            decoder,
+            device,
+            config,
+            target: None,
+            frames_decoded: 0,
+            error: None,
+        }
+    }
+
+    fn begin_decode(&mut self, target: Nv12DecodeTarget) {
+        self.target = Some(target);
+        self.frames_decoded = 0;
+        self.error = None;
+    }
+
+    fn finish_decode(&mut self) -> Result<usize> {
+        self.target = None;
+        if let Some(error) = self.error.take() {
+            candle::bail!("{error}");
+        }
+        Ok(self.frames_decoded)
+    }
+
+    fn set_error(&mut self, error: impl fmt::Display) {
+        self.error = Some(error.to_string());
+    }
+
+    fn copy_mapped_nv12(&mut self, src_ptr: u64, src_pitch: usize) -> Result<()> {
+        let Some(target) = self.target else {
+            candle::bail!("NVDECODE display callback has no CUDA NV12 output target");
+        };
+        if target.width != self.config.width || target.height != self.config.height {
+            candle::bail!(
+                "NVDECODE output target {}x{} does not match decoder {}x{}",
+                target.width,
+                target.height,
+                self.config.width,
+                self.config.height
+            );
+        }
+        if src_pitch < target.width {
+            candle::bail!(
+                "NVDECODE mapped frame pitch {src_pitch} is smaller than width {}",
+                target.width
+            );
+        }
+
+        let ptx = nvrtc::safe::compile_ptx_with_opts(
+            NVDEC_COPY_NV12_CUDA,
+            nvrtc::CompileOptions {
+                use_fast_math: Some(true),
+                ..Default::default()
+            },
+        )
+        .w()?;
+        let func = self.device.get_or_load_custom_func(
+            "swm_copy_nvdec_nv12",
+            "swm_nvdec_copy",
+            &ptx.to_src(),
+        )?;
+
+        let byte_count = target.width * target.height * 3 / 2;
+        let cfg = LaunchConfig::for_num_elems(byte_count as u32);
+        let byte_count_u32 = byte_count as u32;
+        let src_pitch_u32 = src_pitch as u32;
+        let width_u32 = target.width as u32;
+        let height_u32 = target.height as u32;
+        let mut builder = func.builder();
+        builder.arg(&src_ptr);
+        builder.arg(&src_pitch_u32);
+        builder.arg(&target.y_ptr);
+        builder.arg(&target.uv_ptr);
+        builder.arg(&byte_count_u32);
+        builder.arg(&width_u32);
+        builder.arg(&height_u32);
+        unsafe { builder.launch(cfg) }.w()?;
+        self.device.cuda_stream().synchronize().w()?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Nv12DecodeTarget {
+    y_ptr: u64,
+    uv_ptr: u64,
+    width: usize,
+    height: usize,
+}
+
+unsafe extern "C" fn nvdec_sequence_callback(
+    user_data: *mut c_void,
+    format: *mut CuVideoFormat,
+) -> c_int {
+    let Some(state) = (unsafe { (user_data as *mut NvDecParserState).as_mut() }) else {
+        return 0;
+    };
+    if format.is_null() {
+        state.set_error("NVDECODE sequence callback received null format");
+        return 0;
+    }
+    let format = unsafe { &*format };
+    if format.coded_width as usize != state.config.width
+        || format.coded_height as usize != state.config.height
+    {
+        let coded_width = format.coded_width;
+        let coded_height = format.coded_height;
+        let config_width = state.config.width;
+        let config_height = state.config.height;
+        state.set_error(format_args!(
+            "NVDECODE bitstream dimensions {}x{} do not match decoder {}x{}",
+            coded_width, coded_height, config_width, config_height
+        ));
+        return 0;
+    }
+    state
+        .config
+        .decode_surfaces
+        .max(format.min_num_decode_surfaces as usize) as c_int
+}
+
+unsafe extern "C" fn nvdec_decode_picture_callback(
+    user_data: *mut c_void,
+    pic_params: *mut c_void,
+) -> c_int {
+    let Some(state) = (unsafe { (user_data as *mut NvDecParserState).as_mut() }) else {
+        return 0;
+    };
+    if pic_params.is_null() {
+        state.set_error("NVDECODE decode callback received null picture params");
+        return 0;
+    }
+    match check_cuvid(
+        unsafe { cuvidDecodePicture(state.decoder, pic_params) },
+        "cuvidDecodePicture",
+    ) {
+        Ok(()) => 1,
+        Err(err) => {
+            state.set_error(err);
+            0
+        }
+    }
+}
+
+unsafe extern "C" fn nvdec_display_picture_callback(
+    user_data: *mut c_void,
+    display: *mut CuvidParserDispInfo,
+) -> c_int {
+    let Some(state) = (unsafe { (user_data as *mut NvDecParserState).as_mut() }) else {
+        return 0;
+    };
+    if display.is_null() {
+        state.set_error("NVDECODE display callback received null display info");
+        return 0;
+    }
+    let display = unsafe { &*display };
+    let stream = state.device.cuda_stream();
+    let mut proc_params = CuvidProcParams {
+        progressive_frame: display.progressive_frame,
+        second_field: 0,
+        top_field_first: display.top_field_first,
+        unpaired_field: 0,
+        reserved_flags: 0,
+        reserved_zero: 0,
+        raw_input_dptr: 0,
+        raw_input_pitch: 0,
+        raw_input_format: 0,
+        raw_output_dptr: 0,
+        raw_output_pitch: 0,
+        reserved1: 0,
+        output_stream: stream.cu_stream() as CuStream,
+        reserved: [0; 46],
+        histogram_dptr: ptr::null_mut(),
+        reserved2: [ptr::null_mut(); 1],
+    };
+    let mut mapped_ptr: c_ulonglong = 0;
+    let mut pitch: c_uint = 0;
+    let map_result = check_cuvid(
+        unsafe {
+            cuvidMapVideoFrame64(
+                state.decoder,
+                display.picture_index,
+                &mut mapped_ptr as *mut c_ulonglong,
+                &mut pitch as *mut c_uint,
+                &mut proc_params as *mut CuvidProcParams,
+            )
+        },
+        "cuvidMapVideoFrame64",
+    );
+    if let Err(err) = map_result {
+        state.set_error(err);
+        return 0;
+    }
+
+    let copy_result = state.copy_mapped_nv12(mapped_ptr, pitch as usize);
+    let unmap_result = check_cuvid(
+        unsafe { cuvidUnmapVideoFrame64(state.decoder, mapped_ptr) },
+        "cuvidUnmapVideoFrame64",
+    );
+    match copy_result.and(unmap_result) {
+        Ok(()) => {
+            state.frames_decoded += 1;
+            1
+        }
+        Err(err) => {
+            state.set_error(err);
+            0
+        }
+    }
+}
+
 fn check_cuvid(status: c_int, context: &str) -> Result<()> {
     if status == CUDA_SUCCESS {
         Ok(())
@@ -374,10 +712,14 @@ fn check_cuvid(status: c_int, context: &str) -> Result<()> {
 const CUDA_SUCCESS: c_int = 0;
 const CUDA_VIDEO_DEINTERLACE_WEAVE: c_uint = 0;
 const CUDA_VIDEO_CREATE_PREFER_CUVID: c_uint = 4;
+const CUVID_PKT_ENDOFPICTURE: c_uint = 8;
 
 type CuContext = *mut c_void;
 type CuVideoDecoder = *mut c_void;
 type CuVideoCtxLock = *mut c_void;
+type CuVideoParser = *mut c_void;
+type CuStream = *mut c_void;
+type CuVideoTimestamp = c_longlong;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -435,6 +777,129 @@ struct CuvidDecodeCreateInfo {
     reserved2: [c_ulong; 4],
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct CuvidSourceDataPacket {
+    flags: c_ulong,
+    payload_size: c_ulong,
+    payload: *const c_uchar,
+    timestamp: CuVideoTimestamp,
+}
+
+type NvDecSequenceCallback =
+    Option<unsafe extern "C" fn(user_data: *mut c_void, format: *mut CuVideoFormat) -> c_int>;
+type NvDecDecodeCallback =
+    Option<unsafe extern "C" fn(user_data: *mut c_void, pic_params: *mut c_void) -> c_int>;
+type NvDecDisplayCallback = Option<
+    unsafe extern "C" fn(user_data: *mut c_void, display: *mut CuvidParserDispInfo) -> c_int,
+>;
+type NvDecOperatingPointCallback =
+    Option<unsafe extern "C" fn(user_data: *mut c_void, info: *mut c_void) -> c_int>;
+type NvDecSeiMessageCallback =
+    Option<unsafe extern "C" fn(user_data: *mut c_void, info: *mut c_void) -> c_int>;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct CuvidParserParams {
+    codec_type: c_uint,
+    max_num_decode_surfaces: c_uint,
+    clock_rate: c_uint,
+    error_threshold: c_uint,
+    max_display_delay: c_uint,
+    annexb_and_reserved: c_uint,
+    reserved1: [c_uint; 4],
+    user_data: *mut c_void,
+    sequence_callback: NvDecSequenceCallback,
+    decode_picture_callback: NvDecDecodeCallback,
+    display_picture_callback: NvDecDisplayCallback,
+    operating_point_callback: NvDecOperatingPointCallback,
+    sei_message_callback: NvDecSeiMessageCallback,
+    reserved2: [*mut c_void; 5],
+    ext_video_info: *mut c_void,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct CuvidParserDispInfo {
+    picture_index: c_int,
+    progressive_frame: c_int,
+    top_field_first: c_int,
+    repeat_first_field: c_int,
+    timestamp: CuVideoTimestamp,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct CuVideoFormat {
+    codec: c_uint,
+    frame_rate: CuVideoFormatFrameRate,
+    progressive_sequence: c_uchar,
+    bit_depth_luma_minus8: c_uchar,
+    bit_depth_chroma_minus8: c_uchar,
+    min_num_decode_surfaces: c_uchar,
+    coded_width: c_uint,
+    coded_height: c_uint,
+    display_area: CuVideoFormatDisplayArea,
+    chroma_format: c_uint,
+    bitrate: c_uint,
+    display_aspect_ratio: CuVideoFormatAspectRatio,
+    video_signal_description: CuVideoSignalDescription,
+    seqhdr_data_length: c_uint,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct CuVideoFormatFrameRate {
+    numerator: c_uint,
+    denominator: c_uint,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct CuVideoFormatDisplayArea {
+    left: c_int,
+    top: c_int,
+    right: c_int,
+    bottom: c_int,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct CuVideoFormatAspectRatio {
+    x: c_int,
+    y: c_int,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct CuVideoSignalDescription {
+    flags: c_uchar,
+    color_primaries: c_uchar,
+    transfer_characteristics: c_uchar,
+    matrix_coefficients: c_uchar,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct CuvidProcParams {
+    progressive_frame: c_int,
+    second_field: c_int,
+    top_field_first: c_int,
+    unpaired_field: c_int,
+    reserved_flags: c_uint,
+    reserved_zero: c_uint,
+    raw_input_dptr: c_ulonglong,
+    raw_input_pitch: c_uint,
+    raw_input_format: c_uint,
+    raw_output_dptr: c_ulonglong,
+    raw_output_pitch: c_uint,
+    reserved1: c_uint,
+    output_stream: CuStream,
+    reserved: [c_uint; 46],
+    histogram_dptr: *mut c_ulonglong,
+    reserved2: [*mut c_void; 1],
+}
+
 impl Default for CuvidDecodeCaps {
     fn default() -> Self {
         Self {
@@ -461,14 +926,58 @@ impl Default for CuvidDecodeCaps {
 #[link(name = "nvcuvid")]
 unsafe extern "C" {
     fn cuvidGetDecoderCaps(caps: *mut CuvidDecodeCaps) -> c_int;
+    fn cuvidCreateVideoParser(parser: *mut CuVideoParser, params: *mut CuvidParserParams) -> c_int;
+    fn cuvidParseVideoData(parser: CuVideoParser, packet: *mut CuvidSourceDataPacket) -> c_int;
+    fn cuvidDestroyVideoParser(parser: CuVideoParser) -> c_int;
     fn cuvidCreateDecoder(
         decoder: *mut CuVideoDecoder,
         create_info: *mut CuvidDecodeCreateInfo,
     ) -> c_int;
     fn cuvidDestroyDecoder(decoder: CuVideoDecoder) -> c_int;
+    fn cuvidDecodePicture(decoder: CuVideoDecoder, pic_params: *mut c_void) -> c_int;
+    fn cuvidMapVideoFrame64(
+        decoder: CuVideoDecoder,
+        picture_index: c_int,
+        dev_ptr: *mut c_ulonglong,
+        pitch: *mut c_uint,
+        proc_params: *mut CuvidProcParams,
+    ) -> c_int;
+    fn cuvidUnmapVideoFrame64(decoder: CuVideoDecoder, dev_ptr: c_ulonglong) -> c_int;
     fn cuvidCtxLockCreate(ctx_lock: *mut CuVideoCtxLock, context: CuContext) -> c_int;
     fn cuvidCtxLockDestroy(ctx_lock: CuVideoCtxLock) -> c_int;
 }
+
+const NVDEC_COPY_NV12_CUDA: &str = r#"
+extern "C" __global__ void swm_copy_nvdec_nv12(
+    unsigned long long src_base,
+    unsigned int src_pitch,
+    unsigned long long y_dst_base,
+    unsigned long long uv_dst_base,
+    unsigned int byte_count,
+    unsigned int width,
+    unsigned int height
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= byte_count) {
+        return;
+    }
+
+    const unsigned char* src = (const unsigned char*)src_base;
+    unsigned char* y_dst = (unsigned char*)y_dst_base;
+    unsigned char* uv_dst = (unsigned char*)uv_dst_base;
+    unsigned int y_count = width * height;
+    if (idx < y_count) {
+        unsigned int row = idx / width;
+        unsigned int col = idx - row * width;
+        y_dst[idx] = src[row * src_pitch + col];
+    } else {
+        unsigned int uv_idx = idx - y_count;
+        unsigned int row = uv_idx / width;
+        unsigned int col = uv_idx - row * width;
+        uv_dst[uv_idx] = src[height * src_pitch + row * src_pitch + col];
+    }
+}
+"#;
 
 #[cfg(test)]
 mod tests {
@@ -501,12 +1010,54 @@ mod tests {
     }
 
     #[test]
+    fn parser_structs_match_sdk_layout() {
+        assert_eq!(std::mem::size_of::<CuvidSourceDataPacket>(), 32);
+        assert_eq!(std::mem::align_of::<CuvidSourceDataPacket>(), 8);
+        assert_eq!(std::mem::size_of::<CuVideoFormat>(), 64);
+        assert_eq!(std::mem::align_of::<CuVideoFormat>(), 4);
+        assert_eq!(std::mem::size_of::<CuvidParserParams>(), 136);
+        assert_eq!(std::mem::align_of::<CuvidParserParams>(), 8);
+        assert_eq!(std::mem::size_of::<CuvidProcParams>(), 264);
+        assert_eq!(std::mem::align_of::<CuvidProcParams>(), 8);
+    }
+
+    #[test]
     fn creates_and_destroys_h264_nv12_decoder_on_cuda() -> Result<()> {
         let device = Device::new_cuda(0)?;
         let config = NvDecDecoderConfig::new(NvDecCodec::H264, 64, 64);
         let decoder = NvDecDecoder::new_nv12(&device, config)?;
 
         assert_eq!(decoder.config(), config);
+        Ok(())
+    }
+
+    #[test]
+    fn creates_and_destroys_h264_nv12_session_on_cuda() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let config = NvDecDecoderConfig::new(NvDecCodec::H264, 64, 64);
+        let session = NvDecSession::new_nv12(&device, config)?;
+
+        assert_eq!(session.config(), config);
+        Ok(())
+    }
+
+    #[test]
+    fn decodes_annexb_packet_from_env_to_nv12_on_cuda() -> Result<()> {
+        let Some(path) = std::env::var_os("SWM_NVDEC_TEST_PACKET") else {
+            return Ok(());
+        };
+        let encoded = std::fs::read(path).map_err(candle::Error::wrap)?;
+        let device = Device::new_cuda(0)?;
+        let config = NvDecDecoderConfig::new(NvDecCodec::H264, 64, 64);
+        let mut session = NvDecSession::new_nv12(&device, config)?;
+        let shape = Nv12ImageShape::new(1, 64, 64);
+        let (y_plane, uv_plane) = crate::media::nv12_tensors(shape, &device)?;
+
+        let frames = session.decode_annexb_to_nv12(&encoded, &y_plane, &uv_plane)?;
+
+        assert!(frames >= 1);
+        assert_eq!(y_plane.dims(), &[1, 64, 64]);
+        assert_eq!(uv_plane.dims(), &[1, 32, 32, 2]);
         Ok(())
     }
 

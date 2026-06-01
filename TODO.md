@@ -53,6 +53,10 @@ predictable and deployment practical.
 - NVDECODE decoder lifecycle now creates and destroys an 8-bit 4:2:0 CUVID
   decoder with NV12 output on the Candle CUDA context; Rust and C ABI tests
   cover H.264 decoder allocation.
+- NVDECODE parser sessions now accept Annex B packets, decode pictures, map
+  display frames, and launch a CUDA copy into Rust-owned CUDA NV12 buffers; Rust
+  and C ABI entrypoints cover parser lifecycle and packet validation, with an
+  opt-in real H.264 packet smoke test through `SWM_NVDEC_TEST_PACKET`.
 - The C ABI now exposes Rust-owned CUDA packed-image and NV12 media buffers,
   device pointer queries, and TD-MPC2/LeWM reset calls that preprocess those
   buffers before session reset.

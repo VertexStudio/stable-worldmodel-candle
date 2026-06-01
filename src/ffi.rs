@@ -14,7 +14,10 @@ use crate::{
     media::{
         ImagePreprocess, ImagePreprocessor, Nv12ColorSpace, Nv12ImageShape, Nv12Preprocessor,
         PackedImageFormat, PackedImageShape, cuda_u8_tensor_device_ptr, nv12_tensors,
-        nvdec::{NvDecCodec, NvDecDecoder, NvDecDecoderConfig, NvDecSurfaceFormat, query_caps_420},
+        nvdec::{
+            NvDecCodec, NvDecDecoder, NvDecDecoderConfig, NvDecSession, NvDecSurfaceFormat,
+            query_caps_420,
+        },
         packed_u8_tensor,
     },
     models::{
@@ -239,6 +242,10 @@ pub struct SwmCudaNv12 {
 
 pub struct SwmNvDecDecoder {
     _decoder: NvDecDecoder,
+}
+
+pub struct SwmNvDecSession {
+    session: NvDecSession,
 }
 
 #[unsafe(no_mangle)]
@@ -533,6 +540,69 @@ pub unsafe extern "C" fn swm_nvdec_decoder_create_420(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn swm_nvdec_decoder_free(handle: *mut SwmNvDecDecoder) {
+    if !handle.is_null() {
+        unsafe {
+            drop(Box::from_raw(handle));
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_nvdec_session_create_420(
+    device: *const c_char,
+    codec: c_int,
+    width: usize,
+    height: usize,
+    decode_surfaces: usize,
+    output_surfaces: usize,
+    out: *mut *mut SwmNvDecSession,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let device = unsafe { optional_string(device)? }
+            .as_deref()
+            .unwrap_or("cuda:0")
+            .parse::<DeviceSpec>()
+            .map_err(FfiError::invalid)?
+            .resolve()
+            .map_err(FfiError::runtime)?;
+        let codec = NvDecCodec::try_from(codec as u32).map_err(FfiError::runtime)?;
+        let mut config = NvDecDecoderConfig::new(codec, width, height);
+        config.decode_surfaces = decode_surfaces;
+        config.output_surfaces = output_surfaces;
+        let session = NvDecSession::new_nv12(&device, config).map_err(FfiError::runtime)?;
+        let out = unsafe { required_mut(out, "out")? };
+        *out = Box::into_raw(Box::new(SwmNvDecSession { session }));
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_nvdec_session_decode_annexb_to_nv12(
+    handle: *mut SwmNvDecSession,
+    encoded: *const u8,
+    encoded_len: usize,
+    nv12: *const SwmCudaNv12,
+    frames_out: *mut usize,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let encoded = unsafe { required_slice(encoded, encoded_len, "encoded")? };
+        let nv12 = unsafe { required_ref(nv12, "nv12")? };
+        let frames = handle
+            .session
+            .decode_annexb_to_nv12(encoded, &nv12.y_plane, &nv12.uv_plane)
+            .map_err(FfiError::runtime)?;
+        if !frames_out.is_null() {
+            unsafe {
+                *frames_out = frames;
+            }
+        }
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_nvdec_session_free(handle: *mut SwmNvDecSession) {
     if !handle.is_null() {
         unsafe {
             drop(Box::from_raw(handle));

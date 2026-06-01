@@ -276,6 +276,11 @@ at the requested bit depth. Use `bit_depth_minus_8 = 0` for 8-bit H.264/HEVC/AV1
 streams and `2` for 10-bit surfaces. `NvDecDecoder::new_nv12` and
 `swm_nvdec_decoder_create_420` create an 8-bit 4:2:0 CUVID decoder with NV12
 output on that same context.
+`NvDecSession::new_nv12` and `swm_nvdec_session_create_420` add parser
+callbacks for Annex B packet ingestion. `decode_annexb_to_nv12` and
+`swm_nvdec_session_decode_annexb_to_nv12` call `cuvidParseVideoData`, decode
+pictures, map display frames, and launch a CUDA copy from the mapped NV12
+surface into a Rust-owned `SwmCudaNv12` buffer.
 
 For video-surface ingestion, `Nv12Preprocessor` accepts CUDA-resident NV12
 planes as `Y [batch, height, width]` and `UV [batch, height / 2, width / 2, 2]`.
@@ -300,6 +305,20 @@ cargo check --features nvjpeg --all-targets
 cargo test --features nvjpeg media -- --nocapture
 ```
 
+For a real H.264 Annex B parser/map/copy smoke, generate a one-frame stream
+with GStreamer and point the opt-in test at it:
+
+```bash
+mkdir -p target/nvdec-smoke
+gst-launch-1.0 -q videotestsrc num-buffers=1 pattern=black \
+  ! 'video/x-raw,width=64,height=64,framerate=1/1' \
+  ! x264enc tune=zerolatency speed-preset=ultrafast byte-stream=true key-int-max=1 \
+  ! filesink location=target/nvdec-smoke/black64.h264
+
+SWM_NVDEC_TEST_PACKET=target/nvdec-smoke/black64.h264 \
+  cargo test --locked decodes_annexb_packet_from_env_to_nv12_on_cuda -- --nocapture
+```
+
 Set `CUDA_HOME` or `CUDA_PATH` when CUDA is installed outside the standard
 `/usr/local/cuda*` locations so Cargo can find the NVIDIA libraries. Set
 `NVIDIA_VIDEO_CODEC_SDK_PATH` when `libnvcuvid.so` is installed outside the
@@ -309,9 +328,11 @@ Latest local NVDECODE capability validation, run on 2026-06-01:
 
 - `cargo test --locked media::nvdec -- --nocapture` passed.
 - `cargo test --locked ffi_nvdec -- --nocapture` passed.
+- `SWM_NVDEC_TEST_PACKET=target/nvdec-smoke/black64.h264 cargo test --locked decodes_annexb_packet_from_env_to_nv12_on_cuda -- --nocapture` passed after generating the packet with the GStreamer command above.
 - H.264 8-bit 4:2:0 caps on `cuda:0`: supported, 1 NVDEC, NV12 output,
   min `48x16`, max `4096x4096`, histogram support enabled with 256 bins.
-- H.264 64x64 NV12 decoder create/destroy passed through Rust and C ABI tests.
+- H.264 64x64 NV12 decoder create/destroy and parser-session create/destroy
+  passed through Rust and C ABI tests.
 
 For backend parity, generate a Python CUDA fixture, then compare Candle CUDA
 against it:
@@ -575,8 +596,8 @@ goal with `swm_lewm_set_goal_pixels` or a CUDA media goal-history entrypoint
 before calling a LeWM planner entrypoint.
 
 Latest local C ABI validation after adding CUDA media handles, reset
-entrypoints, NVDECODE capability/decoder lifecycle, and TD-MPC2 actor policy
-entrypoints including sampled actor rollout, run on 2026-06-01:
+entrypoints, NVDECODE capability/decoder/parser lifecycle, and TD-MPC2 actor
+policy entrypoints including sampled actor rollout, run on 2026-06-01:
 
 - `cargo check --locked --all-targets` passed.
 - `cargo test --locked ffi::tests::tdmpc2_actor_policy_c_abi_writes_outputs -- --nocapture` passed.
@@ -637,7 +658,5 @@ checkpoint plus config.
 ## Remaining Work
 
 - Add compact fixture integration tests once small public test weights are available.
-- Add NVDECODE parser callbacks and frame mapping that write decoded frames into
-  Rust-owned CUDA NV12 buffers.
 - Add planner buffer reuse/preallocation for lower steady-state allocation cost.
 - Add additional sibling model backends starting from the simplest production inference path for each model.
