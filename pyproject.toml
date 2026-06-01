@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "imageio>=2.37.0",
     "numpy>=2.0",
+    "safetensors>=0.7.0",
     "stable-worldmodel[train]>=0.1.0",
     "transformers<5",
 ]

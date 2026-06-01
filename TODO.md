@@ -35,6 +35,8 @@ predictable and deployment practical.
 - TD-MPC2 state/vector inference and CUDA fixture parity exist.
 - Python parity tooling now runs from this repo's `pyproject.toml`/`uv.lock`
   and depends on the official `stable-worldmodel[train]` package.
+- `tools/convert_state_dict_safetensors.py` converts PyTorch tensor state dicts
+  into deployment-preferred `model.safetensors` files.
 - TD-MPC2 pixel CNN inference exists for NCHW/NHWC image tensors with CUDA
   fixture parity for pixel-only and mixed pixel+state.
 - Rust preprocessing exists for decoded RGB frame stacks, latest-frame pixel

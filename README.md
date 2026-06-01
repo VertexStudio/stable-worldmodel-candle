@@ -196,6 +196,26 @@ present. `schema.json` describes observation names, observation kinds
 `preprocess.json` records runtime preprocessing metadata such as image size,
 normalization, and action bounds.
 
+Convert a raw PyTorch state dict to the preferred safetensors payload with:
+
+```bash
+uv run --no-dev \
+  python tools/convert_state_dict_safetensors.py \
+  --input /path/to/weights.pt \
+  --output /path/to/artifact/model.safetensors
+```
+
+If the checkpoint keys are wrapped, pass `--strip-prefix model.` or another
+exact prefix as needed. The converter accepts raw tensor-only state dicts and
+checkpoints containing a tensor-only `state_dict`.
+
+Latest local safetensors conversion validation, run on 2026-06-01:
+
+- `tools/convert_state_dict_safetensors.py` converted the TD-MPC2 sampled actor
+  fixture weights into `target/tdmpc2-state-sampled-model.safetensors`.
+- `tdmpc2-compare-fixture` loaded the safetensors file on CUDA and matched the
+  Python CUDA fixture, including sampled actor outputs and stable cost argmin.
+
 Core preprocessing supports already-decoded RGB frame buffers and state/action
 arrays. RGB frames can be resized, normalized, stacked as `[batch, time,
 channels, height, width]`, converted to the latest `[batch, channels, height,
@@ -615,6 +635,5 @@ checkpoint plus config.
 - Add per-session CUDA RNG stream handles and offsets for independent
   concurrent planners.
 - Add planner buffer reuse/preallocation for lower steady-state allocation cost.
-- Add safetensors export guidance for deployments that prefer mmap loading.
 - Add LeWM C ABI overhead benchmark rows.
 - Add additional sibling model backends starting from the simplest production inference path for each model.
