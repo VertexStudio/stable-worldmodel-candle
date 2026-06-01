@@ -173,6 +173,9 @@ packed U8 RGB/BGR/RGBA/BGRA CUDA tensor
 nvImageCodec, NPP, and NVDEC work. It writes into a persistent output tensor
 that can be passed directly to LeWM or TD-MPC2 pixel paths without host
 readback.
+`CudaImageHistoryPreprocessor` writes the same decoded frame format into a
+selected `[batch, time, 3, height, width]` slot for LeWM image-history and video
+pipelines.
 
 For backend parity, generate CPU and CUDA Python fixtures from identical CPU
 input tensors, then compare them before comparing Candle:

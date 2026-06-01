@@ -163,6 +163,90 @@ impl CudaImagePreprocessor {
         let op = PackedU8ToNchwF32 {
             input_shape: self.input_shape,
             config: self.config,
+            output_layout: CudaMediaOutputLayout::Latest,
+        };
+        self.output.inplace_op2(input, &op)?;
+        Ok(&self.output)
+    }
+}
+
+pub struct CudaImageHistoryPreprocessor {
+    input_shape: PackedImageShape,
+    config: CudaImagePreprocess,
+    history_len: usize,
+    output: Tensor,
+}
+
+impl fmt::Debug for CudaImageHistoryPreprocessor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CudaImageHistoryPreprocessor")
+            .field("input_shape", &self.input_shape)
+            .field("config", &self.config)
+            .field("history_len", &self.history_len)
+            .field("output_shape", &self.output.shape())
+            .finish()
+    }
+}
+
+impl CudaImageHistoryPreprocessor {
+    pub fn new(
+        device: &Device,
+        input_shape: PackedImageShape,
+        history_len: usize,
+        config: CudaImagePreprocess,
+    ) -> Result<Self> {
+        input_shape.validate()?;
+        config.validate()?;
+        if history_len == 0 {
+            candle::bail!("CUDA image history length must be greater than zero");
+        }
+        if !device.is_cuda() {
+            candle::bail!("CudaImageHistoryPreprocessor requires a CUDA Candle device");
+        }
+
+        let output = Tensor::zeros(
+            (
+                input_shape.batch,
+                history_len,
+                3,
+                config.output_height,
+                config.output_width,
+            ),
+            DType::F32,
+            device,
+        )?;
+
+        Ok(Self {
+            input_shape,
+            config,
+            history_len,
+            output,
+        })
+    }
+
+    pub fn output(&self) -> &Tensor {
+        &self.output
+    }
+
+    pub fn preprocess_packed_u8_into_slot(
+        &mut self,
+        input: &Tensor,
+        history_slot: usize,
+    ) -> Result<&Tensor> {
+        validate_input_tensor(input, self.input_shape)?;
+        if history_slot >= self.history_len {
+            candle::bail!(
+                "CUDA image history slot {history_slot} is outside history_len {}",
+                self.history_len
+            );
+        }
+        let op = PackedU8ToNchwF32 {
+            input_shape: self.input_shape,
+            config: self.config,
+            output_layout: CudaMediaOutputLayout::History {
+                history_len: self.history_len,
+                history_slot,
+            },
         };
         self.output.inplace_op2(input, &op)?;
         Ok(&self.output)
@@ -194,6 +278,16 @@ fn validate_input_tensor(input: &Tensor, shape: PackedImageShape) -> Result<()> 
 struct PackedU8ToNchwF32 {
     input_shape: PackedImageShape,
     config: CudaImagePreprocess,
+    output_layout: CudaMediaOutputLayout,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CudaMediaOutputLayout {
+    Latest,
+    History {
+        history_len: usize,
+        history_slot: usize,
+    },
 }
 
 impl InplaceOp2 for PackedU8ToNchwF32 {
@@ -218,7 +312,13 @@ impl InplaceOp2 for PackedU8ToNchwF32 {
         input: &CudaStorage,
         input_layout: &Layout,
     ) -> Result<()> {
-        validate_output_layout(output, output_layout, self.input_shape, self.config)?;
+        validate_output_layout(
+            output,
+            output_layout,
+            self.input_shape,
+            self.config,
+            self.output_layout,
+        )?;
         validate_input_layout(input, input_layout, self.input_shape)?;
 
         let cuda = output.device.clone();
@@ -252,6 +352,13 @@ impl InplaceOp2 for PackedU8ToNchwF32 {
         let out_h = self.config.output_height as u32;
         let out_w = self.config.output_width as u32;
         let format = self.input_shape.format.kernel_id();
+        let (history_len, history_slot) = match self.output_layout {
+            CudaMediaOutputLayout::Latest => (0u32, 0u32),
+            CudaMediaOutputLayout::History {
+                history_len,
+                history_slot,
+            } => (history_len as u32, history_slot as u32),
+        };
         let mut builder = func.builder();
         builder.arg(&input);
         builder.arg(&mut output);
@@ -263,6 +370,8 @@ impl InplaceOp2 for PackedU8ToNchwF32 {
         builder.arg(&out_h);
         builder.arg(&out_w);
         builder.arg(&format);
+        builder.arg(&history_len);
+        builder.arg(&history_slot);
         builder.arg(&self.config.mean[0]);
         builder.arg(&self.config.mean[1]);
         builder.arg(&self.config.mean[2]);
@@ -279,16 +388,26 @@ fn validate_output_layout(
     layout: &Layout,
     input_shape: PackedImageShape,
     config: CudaImagePreprocess,
+    output_layout: CudaMediaOutputLayout,
 ) -> Result<()> {
     if output.dtype() != DType::F32 {
         candle::bail!("CUDA media output tensor must use F32 dtype");
     }
-    let expected = [
-        input_shape.batch,
-        3,
-        config.output_height,
-        config.output_width,
-    ];
+    let expected = match output_layout {
+        CudaMediaOutputLayout::Latest => vec![
+            input_shape.batch,
+            3,
+            config.output_height,
+            config.output_width,
+        ],
+        CudaMediaOutputLayout::History { history_len, .. } => vec![
+            input_shape.batch,
+            history_len,
+            3,
+            config.output_height,
+            config.output_width,
+        ],
+    };
     if layout.dims() != expected {
         candle::bail!(
             "CUDA media output shape mismatch: expected {:?}, got {:?}",
@@ -398,6 +517,8 @@ extern "C" __global__ void swm_packed_u8_to_nchw_f32(
     unsigned int out_h,
     unsigned int out_w,
     unsigned int format,
+    unsigned int history_len,
+    unsigned int history_slot,
     float mean0,
     float mean1,
     float mean2,
@@ -456,7 +577,14 @@ extern "C" __global__ void swm_packed_u8_to_nchw_f32(
 
     float mean = c == 0u ? mean0 : (c == 1u ? mean1 : mean2);
     float std = c == 0u ? std0 : (c == 1u ? std1 : std2);
-    output[idx] = (value - mean) / std;
+    float normalized = (value - mean) / std;
+    if (history_len == 0u) {
+        output[idx] = normalized;
+    } else {
+        unsigned int out_idx =
+            ((((b * history_len + history_slot) * 3u + c) * out_h + y) * out_w + x);
+        output[out_idx] = normalized;
+    }
 }
 "#;
 
@@ -492,6 +620,32 @@ mod tests {
             0.0, 1.0, 0.0, 1.0, //
             0.0, 0.0, 1.0, 1.0,
         ];
+
+        for (idx, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            let diff = (actual - expected).abs();
+            assert!(
+                diff <= 1e-6,
+                "output[{idx}] expected {expected}, got {actual}, diff {diff}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn preprocesses_packed_rgb_into_history_slot_on_cuda() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let shape = PackedImageShape::new(1, 1, 1, PackedImageFormat::Bgr);
+        let input = packed_u8_tensor_from_host(&[0, 128, 255], shape, &device)?;
+        let config = CudaImagePreprocess {
+            output_height: 1,
+            output_width: 1,
+            mean: [0.0, 0.0, 0.0],
+            std: [1.0, 1.0, 1.0],
+        };
+        let mut preprocessor = CudaImageHistoryPreprocessor::new(&device, shape, 3, config)?;
+        let output = preprocessor.preprocess_packed_u8_into_slot(&input, 1)?;
+        let actual = output.flatten_all()?.to_vec1::<f32>()?;
+        let expected = [0.0, 0.0, 0.0, 1.0, 128.0 / 255.0, 0.0, 0.0, 0.0, 0.0];
 
         for (idx, (actual, expected)) in actual.iter().zip(expected).enumerate() {
             let diff = (actual - expected).abs();
