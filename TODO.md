@@ -57,8 +57,9 @@ predictable and deployment practical.
 - `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
   and TD-MPC2 paths, including TD-MPC2 CEM/MPPI/iCEM planning latency.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
-- TD-MPC2 actor-mean policy rollout runs through Candle CUDA tensors and is
-  exposed through the Rust model API, session API, benchmark harness, and C ABI.
+- TD-MPC2 actor-mean and stochastic sampled policy rollouts run through Candle
+  CUDA tensors and are exposed through the Rust model API, session API,
+  benchmark harness, Python CUDA parity fixtures, and C ABI.
 - CEM exists as the first Rust-native planning solver. It keeps candidate
   generation, rollout/scoring, and elite selection in Candle tensors on the
   selected device.
@@ -281,6 +282,8 @@ overhead.
   `PlanResult::used_host_elite_selection` is false for the built-in planners.
 - `runtime-bench --model td-mpc2` reports CEM, MPPI, and iCEM planner latency
   using the same session/scorer path as deployment code.
+- TD-MPC2 sampled actor rollout uses explicit CUDA noise tensors for parity and
+  generated Candle CUDA noise for deployment runs.
 - Deadline handling is implemented for zero-completed-iteration cases: CEM and
   MPPI use a configured action, while iCEM prefers its warm-start sequence
   before using the configured action. `PlanResult` reports which path was used.
@@ -366,7 +369,7 @@ Expose the stable runtime without forcing a Python service.
 - `ffi` exposes TD-MPC2 state/vector, pixel, and mixed state+pixel artifact
   loading, observation reset, dimension accessors, CEM planning, MPPI planning,
   iCEM planning with persistent warm-start state, actor mean action, actor-mean
-  policy rollout, handle cleanup, and thread-local error reporting.
+  and sampled policy rollout, handle cleanup, and thread-local error reporting.
 - `ffi` exposes LeWM artifact loading, image-history reset, goal pixel setup,
   CEM/MPPI/iCEM planning, handle cleanup, and thread-local error reporting.
 

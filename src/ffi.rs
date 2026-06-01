@@ -992,6 +992,27 @@ pub unsafe extern "C" fn swm_tdmpc2_rollout_actor_mean(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_tdmpc2_rollout_actor_sample(
+    handle: *mut SwmTdMpc2,
+    horizon: usize,
+    num_trajs: usize,
+    actions_out: *mut f32,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let actions = handle
+            .session
+            .rollout_actor_sampled(horizon, num_trajs)
+            .map_err(FfiError::runtime)?;
+        let actions = flatten3(&actions)?;
+        unsafe {
+            copy_required(&actions, actions_out, "actions_out")?;
+        }
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn swm_tdmpc2_plan_mppi(
     handle: *mut SwmTdMpc2,
     ffi_config: SwmMppiPlanConfig,
@@ -1819,6 +1840,13 @@ mod tests {
         assert_eq!(status, SwmStatus::Ok);
         assert!(actions.iter().all(|value| value.is_finite()));
         assert!(rewards.iter().all(|value| value.is_finite()));
+
+        let mut sampled_actions = vec![0f32; 2 * horizon * action_dim];
+        let status = unsafe {
+            swm_tdmpc2_rollout_actor_sample(&mut handle, horizon, 2, sampled_actions.as_mut_ptr())
+        };
+        assert_eq!(status, SwmStatus::Ok);
+        assert!(sampled_actions.iter().all(|value| value.is_finite()));
         Ok(())
     }
 }

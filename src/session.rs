@@ -139,11 +139,34 @@ impl TdMpc2Session {
         self.model.actor_mean_action(z)
     }
 
+    pub fn actor_sample_action(&self, noise: &Tensor) -> Result<Tensor> {
+        let z = self.z.as_ref().ok_or_else(|| {
+            candle::Error::Msg("TdMpc2Session must be reset before actor action".to_string())
+        })?;
+        let noise = noise.to_device(&self.device)?.to_dtype(self.dtype)?;
+        self.model.actor_sample_action(z, &noise)
+    }
+
     pub fn rollout_actor_mean(&self, horizon: usize) -> Result<(Tensor, Tensor, Tensor)> {
         let z = self.z.as_ref().ok_or_else(|| {
             candle::Error::Msg("TdMpc2Session must be reset before actor rollout".to_string())
         })?;
         self.model.rollout_actor_mean(z, horizon)
+    }
+
+    pub fn rollout_actor_sampled(&self, horizon: usize, num_trajs: usize) -> Result<Tensor> {
+        let z = self.z.as_ref().ok_or_else(|| {
+            candle::Error::Msg("TdMpc2Session must be reset before actor rollout".to_string())
+        })?;
+        self.model.rollout_actor_sampled(z, horizon, num_trajs)
+    }
+
+    pub fn rollout_actor_sampled_with_noise(&self, noise: &Tensor) -> Result<Tensor> {
+        let z = self.z.as_ref().ok_or_else(|| {
+            candle::Error::Msg("TdMpc2Session must be reset before actor rollout".to_string())
+        })?;
+        let noise = noise.to_device(&self.device)?.to_dtype(self.dtype)?;
+        self.model.rollout_actor_sampled_with_noise(z, &noise)
     }
 
     pub fn score_candidates(&self, action_candidates: &Tensor) -> Result<Tensor> {

@@ -137,9 +137,32 @@ impl TdMpc2 {
         Ok((next_z, reward_logits))
     }
 
-    pub fn actor_mean_action(&self, z: &Tensor) -> Result<Tensor> {
+    pub fn actor_mean_log_std(&self, z: &Tensor) -> Result<(Tensor, Tensor)> {
         let chunks = self.pi.forward(z)?.chunk(2, D::Minus1)?;
-        chunks[0].tanh()
+        let mean_raw = chunks[0].clone();
+        let log_std = chunks[1].tanh()?.affine(6.0, -4.0)?;
+        Ok((mean_raw, log_std))
+    }
+
+    pub fn actor_mean_action(&self, z: &Tensor) -> Result<Tensor> {
+        let (mean_raw, _) = self.actor_mean_log_std(z)?;
+        mean_raw.tanh()
+    }
+
+    pub fn actor_sample_action(&self, z: &Tensor, noise: &Tensor) -> Result<Tensor> {
+        let (mean_raw, log_std) = self.actor_mean_log_std(z)?;
+        if noise.shape() != mean_raw.shape() {
+            candle::bail!(
+                "TD-MPC2 actor noise shape {:?} must match actor mean shape {:?}",
+                noise.shape(),
+                mean_raw.shape()
+            );
+        }
+        let noise = noise
+            .to_device(mean_raw.device())?
+            .to_dtype(mean_raw.dtype())?;
+        let std = log_std.exp()?;
+        mean_raw.broadcast_add(&std.broadcast_mul(&noise)?)?.tanh()
     }
 
     pub fn rollout_actor_mean(
@@ -175,6 +198,68 @@ impl TdMpc2 {
             Tensor::stack(&reward_refs, 1)?,
             z,
         ))
+    }
+
+    pub fn rollout_actor_sampled(
+        &self,
+        z: &Tensor,
+        horizon: usize,
+        num_trajs: usize,
+    ) -> Result<Tensor> {
+        if horizon == 0 {
+            candle::bail!("TD-MPC2 sampled actor rollout horizon must be greater than zero");
+        }
+        if num_trajs == 0 {
+            candle::bail!("TD-MPC2 sampled actor rollout requires at least one trajectory");
+        }
+        let batch = z.dim(0)?;
+        let noise = Tensor::randn(
+            0f32,
+            1f32,
+            (num_trajs, batch, horizon, self.cfg.action_dim),
+            z.device(),
+        )?
+        .to_dtype(z.dtype())?;
+        self.rollout_actor_sampled_with_noise(z, &noise)
+    }
+
+    pub fn rollout_actor_sampled_with_noise(&self, z: &Tensor, noise: &Tensor) -> Result<Tensor> {
+        let (num_trajs, batch, horizon, action_dim) = noise.dims4()?;
+        if num_trajs == 0 {
+            candle::bail!("TD-MPC2 sampled actor rollout requires at least one trajectory");
+        }
+        if horizon == 0 {
+            candle::bail!("TD-MPC2 sampled actor rollout horizon must be greater than zero");
+        }
+        if action_dim != self.cfg.action_dim {
+            candle::bail!(
+                "TD-MPC2 sampled actor noise action dim {action_dim} does not match action_dim {}",
+                self.cfg.action_dim
+            );
+        }
+        let (z_batch, latent_dim) = z.dims2()?;
+        if z_batch != batch {
+            candle::bail!(
+                "TD-MPC2 sampled actor noise batch {batch} does not match latent batch {z_batch}"
+            );
+        }
+        let noise = noise.to_device(z.device())?.to_dtype(z.dtype())?;
+        let mut z = z
+            .unsqueeze(0)?
+            .broadcast_as((num_trajs, batch, latent_dim))?
+            .reshape((num_trajs * batch, latent_dim))?;
+        let mut actions = Vec::with_capacity(horizon);
+        for t in 0..horizon {
+            let noise_t = noise
+                .i((.., .., t, ..))?
+                .reshape((num_trajs * batch, action_dim))?;
+            let action = self.actor_sample_action(&z, &noise_t)?;
+            let z_a = cat_last(&[z, action.clone()])?;
+            z = self.dynamics.forward(&z_a)?;
+            actions.push(action.reshape((num_trajs, batch, action_dim))?);
+        }
+        let action_refs = actions.iter().collect::<Vec<_>>();
+        Tensor::stack(&action_refs, 2)?.mean(0)
     }
 
     pub fn get_cost_state(&self, state: &Tensor, action_candidates: &Tensor) -> Result<Tensor> {

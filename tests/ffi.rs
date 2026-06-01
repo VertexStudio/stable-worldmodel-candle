@@ -10,6 +10,7 @@ use stable_worldmodel_candle::ffi::{
     swm_nvdec_query_420, swm_tdmpc2_actor_mean_action, swm_tdmpc2_clear_icem_warm_start,
     swm_tdmpc2_free, swm_tdmpc2_load, swm_tdmpc2_plan_icem, swm_tdmpc2_reset_cuda_image,
     swm_tdmpc2_reset_pixels, swm_tdmpc2_reset_state_pixels, swm_tdmpc2_rollout_actor_mean,
+    swm_tdmpc2_rollout_actor_sample,
 };
 
 #[test]
@@ -213,6 +214,16 @@ fn ffi_rollout_actor_mean_rejects_null_handle() {
             rewards.as_mut_ptr(),
         )
     };
+
+    assert_eq!(status, SwmStatus::NullPointer);
+    assert!(last_error().contains("handle"));
+}
+
+#[test]
+fn ffi_rollout_actor_sample_rejects_null_handle() {
+    let mut actions = [0f32; 12];
+    let status =
+        unsafe { swm_tdmpc2_rollout_actor_sample(ptr::null_mut(), 3, 2, actions.as_mut_ptr()) };
 
     assert_eq!(status, SwmStatus::NullPointer);
     assert!(last_error().contains("handle"));

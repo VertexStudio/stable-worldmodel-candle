@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use candle::{DType, Tensor};
+use candle::{DType, IndexOp, Tensor};
 use clap::Parser;
 use stable_worldmodel_candle::{
     checkpoint,
@@ -68,7 +68,11 @@ fn main() -> anyhow::Result<()> {
         "z",
         "next_z",
         "reward_logits",
+        "actor_noise",
+        "actor_log_std",
         "actor_mean",
+        "actor_sample",
+        "actor_sample_rollout",
         "cost",
     ]);
     let arrays = Tensor::read_npz_by_name(&args.fixture, &names)?;
@@ -97,7 +101,15 @@ fn main() -> anyhow::Result<()> {
     idx += 1;
     let expected_reward_logits = &arrays[idx];
     idx += 1;
+    let actor_noise = arrays[idx].to_device(&device)?.to_dtype(DType::F32)?;
+    idx += 1;
+    let expected_actor_log_std = &arrays[idx];
+    idx += 1;
     let expected_actor_mean = &arrays[idx];
+    idx += 1;
+    let expected_actor_sample = &arrays[idx];
+    idx += 1;
+    let expected_actor_sample_rollout = &arrays[idx];
     idx += 1;
     let expected_cost = &arrays[idx];
 
@@ -114,11 +126,36 @@ fn main() -> anyhow::Result<()> {
         args.tolerance,
     )?;
 
+    let (_, actor_log_std) = model.actor_mean_log_std(&z)?;
+    compare(
+        "actor_log_std",
+        &actor_log_std,
+        expected_actor_log_std,
+        args.tolerance,
+    )?;
+
     let actor_mean = model.actor_mean_action(&z)?;
     compare(
         "actor_mean",
         &actor_mean,
         expected_actor_mean,
+        args.tolerance,
+    )?;
+
+    let actor_sample_noise = actor_noise.i((0, .., 0, ..))?;
+    let actor_sample = model.actor_sample_action(&z, &actor_sample_noise)?;
+    compare(
+        "actor_sample",
+        &actor_sample,
+        expected_actor_sample,
+        args.tolerance,
+    )?;
+
+    let actor_sample_rollout = model.rollout_actor_sampled_with_noise(&z, &actor_noise)?;
+    compare(
+        "actor_sample_rollout",
+        &actor_sample_rollout,
+        expected_actor_sample_rollout,
         args.tolerance,
     )?;
 

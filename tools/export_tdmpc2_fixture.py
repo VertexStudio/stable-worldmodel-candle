@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--horizon", type=int, default=3)
+    parser.add_argument("--actor-trajs", type=int, default=4)
     parser.add_argument(
         "--fixture-kind",
         choices=("state", "pixel", "both"),
@@ -83,10 +84,13 @@ def tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
 
 def main() -> None:
     args = parse_args()
+    if args.actor_trajs <= 0:
+        raise ValueError("--actor-trajs must be greater than zero")
     if args.stable_worldmodel_root:
         sys.path.insert(0, str(Path(args.stable_worldmodel_root).resolve()))
 
     from stable_worldmodel.wm.tdmpc2 import TDMPC2
+    from stable_worldmodel.wm.tdmpc2.module import log_std
 
     torch.set_num_threads(1)
     torch.set_grad_enabled(False)
@@ -135,13 +139,41 @@ def main() -> None:
             args.action_dim,
             dtype=torch.float32,
         ).clamp(-1.0, 1.0)
+        actor_noise = torch.randn(
+            args.actor_trajs,
+            args.batch_size,
+            args.horizon,
+            args.action_dim,
+            dtype=torch.float32,
+        )
 
         action_device = action.to(device)
         action_candidates_device = action_candidates.to(device)
+        actor_noise_device = actor_noise.to(device)
 
         z = model.encode(obs_device).contiguous()
         next_z, reward_logits = model.forward(z, action_device)
-        actor_mean = torch.tanh(model.pi(z).chunk(2, dim=-1)[0]).contiguous()
+        mean_raw, log_std_raw = model.pi(z).chunk(2, dim=-1)
+        actor_log_std = log_std(log_std_raw, low=-10, dif=12).contiguous()
+        actor_mean = torch.tanh(mean_raw).contiguous()
+        actor_sample = torch.tanh(
+            mean_raw + actor_log_std.exp() * actor_noise_device[0, :, 0, :]
+        ).contiguous()
+        trajs = []
+        for traj_idx in range(args.actor_trajs):
+            curr_z = z
+            traj = []
+            for step_idx in range(args.horizon):
+                step_mean, step_log_std_raw = model.pi(curr_z).chunk(2, dim=-1)
+                step_log_std = log_std(step_log_std_raw, low=-10, dif=12)
+                act = torch.tanh(
+                    step_mean
+                    + step_log_std.exp() * actor_noise_device[traj_idx, :, step_idx, :]
+                )
+                traj.append(act)
+                curr_z = model.dynamics(torch.cat([curr_z, act], dim=-1))
+            trajs.append(torch.stack(traj, dim=1))
+        actor_sample_rollout = torch.stack(trajs).mean(0).contiguous()
         cost = model.get_cost(obs_device, action_candidates_device).contiguous()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -151,7 +183,11 @@ def main() -> None:
         z=tensor_to_numpy(z),
         next_z=tensor_to_numpy(next_z),
         reward_logits=tensor_to_numpy(reward_logits),
+        actor_noise=tensor_to_numpy(actor_noise),
+        actor_log_std=tensor_to_numpy(actor_log_std),
         actor_mean=tensor_to_numpy(actor_mean),
+        actor_sample=tensor_to_numpy(actor_sample),
+        actor_sample_rollout=tensor_to_numpy(actor_sample_rollout),
         cost=tensor_to_numpy(cost),
     )
     for name, tensor in obs_host.items():
@@ -168,6 +204,7 @@ def main() -> None:
     print(f"batch_size={args.batch_size}")
     print(f"samples={args.samples}")
     print(f"horizon={args.horizon}")
+    print(f"actor_trajs={args.actor_trajs}")
     print(f"fixture_kind={args.fixture_kind}")
     print(f"state_dim={args.state_dim}")
     print(f"image_size={args.image_size}")

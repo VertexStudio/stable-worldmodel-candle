@@ -278,6 +278,10 @@ fn bench_tdmpc2(
             model.rollout_actor_mean(&z, args.horizon)?;
             Ok(())
         })?,
+        bench("policy_sample", args, device, || {
+            model.rollout_actor_sampled(&z, args.horizon, args.samples)?;
+            Ok(())
+        })?,
         bench("plan_cem", args, device, || {
             cem.plan(&session)?;
             Ok(())

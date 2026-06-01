@@ -22,10 +22,21 @@ fn tdmpc2_session_scores_candidates_after_reset() -> anyhow::Result<()> {
     let action = session.actor_mean_action()?;
     assert_eq!(action.shape().dims(), &[2, 4]);
 
+    let zero_noise = Tensor::zeros((2, 4), dtype, &device)?;
+    let sampled_action = session.actor_sample_action(&zero_noise)?;
+    assert_eq!(sampled_action.shape().dims(), &[2, 4]);
+
     let (policy_actions, rewards, final_z) = session.rollout_actor_mean(3)?;
     assert_eq!(policy_actions.shape().dims(), &[2, 3, 4]);
     assert_eq!(rewards.shape().dims(), &[2, 3, 1]);
     assert_eq!(final_z.shape().dims(), &[2, 128]);
+
+    let rollout_noise = Tensor::randn(0f32, 1f32, (3, 2, 3, 4), &device)?;
+    let sampled_rollout = session.rollout_actor_sampled_with_noise(&rollout_noise)?;
+    assert_eq!(sampled_rollout.shape().dims(), &[2, 3, 4]);
+
+    let generated_rollout = session.rollout_actor_sampled(3, 3)?;
+    assert_eq!(generated_rollout.shape().dims(), &[2, 3, 4]);
 
     let candidates = Tensor::randn(0f32, 1f32, (2, 5, 3, 4), &device)?;
     let cost = session.score_candidates(&candidates)?;

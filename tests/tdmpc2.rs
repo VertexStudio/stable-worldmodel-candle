@@ -55,6 +55,38 @@ fn rolls_out_actor_mean_policy() -> candle::Result<()> {
 }
 
 #[test]
+fn samples_actor_policy_from_cuda_noise() -> candle::Result<()> {
+    let device = Device::new_cuda(0)?;
+    let model = model(12, 4, &device)?;
+    let z = Tensor::randn(0f32, 1f32, (2, 128), &device)?;
+
+    let (mean_raw, log_std) = model.actor_mean_log_std(&z)?;
+    assert_eq!(mean_raw.dims(), &[2, 4]);
+    assert_eq!(log_std.dims(), &[2, 4]);
+    for value in log_std.flatten_all()?.to_vec1::<f32>()? {
+        assert!(value.is_finite());
+        assert!((-10.0..=2.0).contains(&value));
+    }
+
+    let zero_noise = Tensor::zeros((2, 4), DType::F32, &device)?;
+    let sampled = model.actor_sample_action(&z, &zero_noise)?;
+    let mean = model.actor_mean_action(&z)?;
+    let diff = (sampled - mean)?.abs()?.max_all()?.to_scalar::<f32>()?;
+    assert!(diff <= 1e-6, "zero-noise sampled action diff {diff}");
+
+    let rollout_noise = Tensor::randn(0f32, 1f32, (3, 2, 4, 4), &device)?;
+    let sampled_rollout = model.rollout_actor_sampled_with_noise(&z, &rollout_noise)?;
+    assert_eq!(sampled_rollout.dims(), &[2, 4, 4]);
+    for value in sampled_rollout.flatten_all()?.to_vec1::<f32>()? {
+        assert!(value.is_finite());
+    }
+
+    let generated_rollout = model.rollout_actor_sampled(&z, 4, 3)?;
+    assert_eq!(generated_rollout.dims(), &[2, 4, 4]);
+    Ok(())
+}
+
+#[test]
 fn scores_action_candidates_from_state_batch() -> candle::Result<()> {
     let device = Device::new_cuda(0)?;
     let model = model(12, 4, &device)?;
