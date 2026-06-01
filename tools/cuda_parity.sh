@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SWM_ROOT="${STABLE_WORLDMODEL_ROOT:-"$ROOT/../stable-worldmodel"}"
+SWM_ROOT="${STABLE_WORLDMODEL_ROOT:-}"
 MODEL="${MODEL:-quentinll/lewm-pusht}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
 CPU_FIXTURE="${CPU_FIXTURE:-"$ROOT/target/lewm-pusht-python-cpu.npz"}"
@@ -21,16 +21,19 @@ fi
 
 uv_args=(
   uv run
+  --project "$ROOT"
   --python "$PYTHON_VERSION"
   --no-dev
-  --extra train
-  --with imageio
-  --with 'transformers<5'
 )
 
-run_swm_python() {
+swm_root_args=()
+if [[ -n "$SWM_ROOT" ]]; then
+  swm_root_args+=(--stable-worldmodel-root "$SWM_ROOT")
+fi
+
+run_python() {
   (
-    cd "$SWM_ROOT"
+    cd "$ROOT"
     "${uv_args[@]}" python "$@"
   )
 }
@@ -46,16 +49,11 @@ cudnn_available() {
   return 1
 }
 
-if [[ ! -d "$SWM_ROOT" ]]; then
-  echo "stable-worldmodel checkout not found: $SWM_ROOT" >&2
-  exit 1
-fi
-
 section "Environment sanity"
 nvidia-smi
 nvcc --version || true
 (
-  cd "$SWM_ROOT"
+  cd "$ROOT"
   "${uv_args[@]}" python - <<'PY'
 import torch
 
@@ -96,19 +94,19 @@ case "$RUN_CUDNN" in
 esac
 
 section "Python LeWM fixtures"
-run_swm_python "$ROOT/tools/export_lewm_fixture.py" \
-  --stable-worldmodel-root "$SWM_ROOT" \
+run_python "$ROOT/tools/export_lewm_fixture.py" \
+  "${swm_root_args[@]}" \
   --model "$MODEL" \
   --device cpu \
   --output "$CPU_FIXTURE"
-run_swm_python "$ROOT/tools/export_lewm_fixture.py" \
-  --stable-worldmodel-root "$SWM_ROOT" \
+run_python "$ROOT/tools/export_lewm_fixture.py" \
+  "${swm_root_args[@]}" \
   --model "$MODEL" \
   --device cuda \
   --output "$CUDA_FIXTURE"
 
 section "Python CPU vs Python CUDA"
-run_swm_python "$ROOT/tools/compare_npz.py" \
+run_python "$ROOT/tools/compare_npz.py" \
   "$CPU_FIXTURE" "$CUDA_FIXTURE" \
   --left-label python-cpu \
   --right-label python-cuda

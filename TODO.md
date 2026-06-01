@@ -33,6 +33,8 @@ predictable and deployment practical.
 - LeWM image-model implementation exists.
 - LeWM Python/Candle CPU/CUDA parity exists through `tools/cuda_parity.sh`.
 - TD-MPC2 state/vector inference and CPU/CUDA fixture parity exist.
+- Python parity tooling now runs from this repo's `pyproject.toml`/`uv.lock`
+  and depends on the official `stable-worldmodel[train]` package.
 - TD-MPC2 pixel CNN inference exists for NCHW/NHWC image tensors with CPU/CUDA
   fixture parity for pixel-only and CPU fixture parity for mixed pixel+state.
 - Rust preprocessing exists for decoded RGB frame stacks, latest-frame pixel

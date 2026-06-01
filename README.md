@@ -43,27 +43,27 @@ Official LeWM mirrors currently use this layout, for example
 `quentinll/lewm-pusht`, `quentinll/lewm-reacher`, and
 `quentinll/lewm-tworooms`.
 
-To export a deterministic Python fixture from the original implementation:
+This repo includes a `pyproject.toml` and `uv.lock` for parity tooling. The
+Python environment depends on the official `stable-worldmodel[train]` package
+and pins `transformers<5` for the current public LeWM checkpoints, whose
+weights use the Hugging Face ViT 4.x key layout (`encoder.encoder.layer.*`).
+
+To export a deterministic Python fixture from the official implementation:
 
 ```bash
-# From a checkout where stable-worldmodel and stable-worldmodel-candle are siblings.
-cd stable-worldmodel
-uv run --python 3.12 --no-dev --extra train \
-  --with imageio --with 'transformers<5' \
-  python ../stable-worldmodel-candle/tools/export_lewm_fixture.py \
-  --stable-worldmodel-root . \
+uv run --python 3.12 --no-dev \
+  python tools/export_lewm_fixture.py \
   --model quentinll/lewm-pusht \
   --device cpu \
-  --output ../stable-worldmodel-candle/target/lewm-pusht-fixture.npz
+  --output target/lewm-pusht-fixture.npz
 ```
 
-The `transformers<5` pin matters for the current public LeWM checkpoints: the
-weights use the Hugging Face ViT 4.x key layout (`encoder.encoder.layer.*`).
+For local upstream development, pass `--stable-worldmodel-root /path/to/source`
+or set `STABLE_WORLDMODEL_ROOT=/path/to/source`.
 
 Then compare Candle outputs against the Python fixture:
 
 ```bash
-cd ../stable-worldmodel-candle
 cargo run --bin lewm-compare-fixture -- \
   --fixture target/lewm-pusht-fixture.npz \
   --weights ~/.stable_worldmodel/checkpoints/models--quentinll--lewm-pusht/weights.pt \
@@ -85,16 +85,12 @@ TD-MPC2 state/vector fixture export uses a deterministic Python model and saves
 both an `.npz` fixture and a `.pt` state dict:
 
 ```bash
-cd stable-worldmodel
 uv run --python 3.12 --no-dev \
-  --with imageio \
-  python ../stable-worldmodel-candle/tools/export_tdmpc2_fixture.py \
-  --stable-worldmodel-root . \
+  python tools/export_tdmpc2_fixture.py \
   --device cpu \
-  --output ../stable-worldmodel-candle/target/tdmpc2-state-python-cpu.npz \
-  --weights-output ../stable-worldmodel-candle/target/tdmpc2-state-weights.pt
+  --output target/tdmpc2-state-python-cpu.npz \
+  --weights-output target/tdmpc2-state-weights.pt
 
-cd ../stable-worldmodel-candle
 cargo run --bin tdmpc2-compare-fixture -- \
   --fixture target/tdmpc2-state-python-cpu.npz \
   --weights target/tdmpc2-state-weights.pt
@@ -104,17 +100,13 @@ The same exporter and comparator cover pixel-only and mixed pixel+state
 fixtures:
 
 ```bash
-cd stable-worldmodel
 uv run --python 3.12 --no-dev \
-  --with imageio \
-  python ../stable-worldmodel-candle/tools/export_tdmpc2_fixture.py \
-  --stable-worldmodel-root . \
+  python tools/export_tdmpc2_fixture.py \
   --fixture-kind pixel \
   --device cpu \
-  --output ../stable-worldmodel-candle/target/tdmpc2-pixel-python-cpu.npz \
-  --weights-output ../stable-worldmodel-candle/target/tdmpc2-pixel-weights.pt
+  --output target/tdmpc2-pixel-python-cpu.npz \
+  --weights-output target/tdmpc2-pixel-weights.pt
 
-cd ../stable-worldmodel-candle
 cargo run --bin tdmpc2-compare-fixture -- \
   --fixture target/tdmpc2-pixel-python-cpu.npz \
   --weights target/tdmpc2-pixel-weights.pt \
@@ -123,6 +115,19 @@ cargo run --bin tdmpc2-compare-fixture -- \
 
 Use `--fixture-kind both` on both commands to validate combined pixel+state
 encoding.
+
+Self-contained Python tooling validation, run on 2026-06-01:
+
+- `uv lock --locked` passed with `stable-worldmodel[train]` from PyPI.
+- `uv run --locked --python 3.12 --no-dev python ...` imported
+  `stable_worldmodel` from this repo's `.venv`.
+- `tools/export_tdmpc2_fixture.py` generated a CPU state fixture using only this
+  repo's locked Python environment.
+- `cargo run --locked --bin tdmpc2-compare-fixture -- --fixture
+  target/tdmpc2-self-contained-python-cpu.npz --weights
+  target/tdmpc2-self-contained-weights.pt` passed with max abs diffs:
+  `z=2.38e-7`, `next_z=2.38e-7`, `reward_logits=0`, `actor_mean=7.64e-8`,
+  `cost=3.81e-6`, and stable cost argmin.
 
 ## Deployment Artifacts
 
@@ -208,27 +213,22 @@ For backend parity, generate CPU and CUDA Python fixtures from identical CPU
 input tensors, then compare them before comparing Candle:
 
 ```bash
-cd stable-worldmodel
-uv run --python 3.12 --no-dev --extra train \
-  --with imageio --with 'transformers<5' \
-  python ../stable-worldmodel-candle/tools/export_lewm_fixture.py \
-  --stable-worldmodel-root . \
+uv run --python 3.12 --no-dev \
+  python tools/export_lewm_fixture.py \
   --model quentinll/lewm-pusht \
   --device cpu \
-  --output ../stable-worldmodel-candle/target/lewm-pusht-python-cpu.npz
+  --output target/lewm-pusht-python-cpu.npz
 
-uv run --python 3.12 --no-dev --extra train \
-  --with imageio --with 'transformers<5' \
-  python ../stable-worldmodel-candle/tools/export_lewm_fixture.py \
-  --stable-worldmodel-root . \
+uv run --python 3.12 --no-dev \
+  python tools/export_lewm_fixture.py \
   --model quentinll/lewm-pusht \
   --device cuda \
-  --output ../stable-worldmodel-candle/target/lewm-pusht-python-cuda.npz
+  --output target/lewm-pusht-python-cuda.npz
 
-uv run --python 3.12 --no-dev --extra train \
-  python ../stable-worldmodel-candle/tools/compare_npz.py \
-  ../stable-worldmodel-candle/target/lewm-pusht-python-cpu.npz \
-  ../stable-worldmodel-candle/target/lewm-pusht-python-cuda.npz \
+uv run --python 3.12 --no-dev \
+  python tools/compare_npz.py \
+  target/lewm-pusht-python-cpu.npz \
+  target/lewm-pusht-python-cuda.npz \
   --left-label python-cpu \
   --right-label python-cuda
 ```
@@ -282,8 +282,9 @@ tools/cuda_parity.sh
 The matrix runs environment sanity checks, Rust CUDA build/tests, cuDNN checks
 when detected, Python CPU-vs-CUDA fixture diffs, Candle CPU vs
 Python CPU, Candle CUDA vs Python CUDA, and Candle CUDA vs Python CPU. Set
-`STABLE_WORLDMODEL_ROOT`, `MODEL`, `CPU_FIXTURE`, `CUDA_FIXTURE`,
-`PYTHON_VERSION`, `RUN_CUDNN`, or `CARGO_LOCKED=0` to override defaults.
+`MODEL`, `CPU_FIXTURE`, `CUDA_FIXTURE`, `PYTHON_VERSION`, `RUN_CUDNN`, or
+`CARGO_LOCKED=0` to override defaults. Set `STABLE_WORLDMODEL_ROOT` only when
+testing a local Python source tree instead of the locked package.
 
 Default parity tolerances are per-output: `act_emb=1e-5`, `emb=1e-3`,
 `pred=1e-3`, `rollout=2e-3`, and `cost=1e-2`. The Python and Rust comparators

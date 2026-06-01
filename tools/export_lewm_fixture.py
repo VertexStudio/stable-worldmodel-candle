@@ -23,8 +23,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cache-dir", default=None)
     parser.add_argument(
         "--stable-worldmodel-root",
-        default=os.environ.get("STABLE_WORLDMODEL_PY"),
-        help="optional local stable-worldmodel checkout to prepend to PYTHONPATH",
+        default=os.environ.get("STABLE_WORLDMODEL_ROOT")
+        or os.environ.get("STABLE_WORLDMODEL_PY"),
+        help="local stable-worldmodel source tree to prepend to PYTHONPATH",
     )
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--samples", type=int, default=2)
