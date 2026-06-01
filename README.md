@@ -44,9 +44,9 @@ compatibility is not a reason to keep slower runtime paths in this crate.
   scoring; session caching; and Rust-native MPC planning.
 - NVIDIA media path: nvJPEG decode into Candle CUDA tensors, packed
   RGB/BGR/RGBA/BGRA CUDA frame preprocessing, NV12 CUDA surface preprocessing,
-  direct `libnvcuvid` NVDECODE capability probing, fused
-  resize/reorder/colorspace/normalization kernels, and history-slot writes for
-  image/video control loops.
+  direct `libnvcuvid` NVDECODE capability probing and decoder lifecycle,
+  fused resize/reorder/colorspace/normalization kernels, and history-slot
+  writes for image/video control loops.
 - Planning solvers: CEM, MPPI, and iCEM generate candidates, score world-model
   rollouts, select/update action sequences, and keep the hot planning path on
   Candle CUDA tensors.
@@ -252,7 +252,9 @@ NVDECODE capability probing is linked directly against `libnvcuvid`.
 `media::nvdec::query_caps_420` and `swm_nvdec_query_420` bind the same Candle
 CUDA context used by model inference, then query codec support for 4:2:0 video
 at the requested bit depth. Use `bit_depth_minus_8 = 0` for 8-bit H.264/HEVC/AV1
-streams and `2` for 10-bit surfaces.
+streams and `2` for 10-bit surfaces. `NvDecDecoder::new_nv12` and
+`swm_nvdec_decoder_create_420` create an 8-bit 4:2:0 CUVID decoder with NV12
+output on that same context.
 
 For video-surface ingestion, `Nv12Preprocessor` accepts CUDA-resident NV12
 planes as `Y [batch, height, width]` and `UV [batch, height / 2, width / 2, 2]`.
@@ -288,6 +290,7 @@ Latest local NVDECODE capability validation, run on 2026-06-01:
 - `cargo test --locked ffi_nvdec -- --nocapture` passed.
 - H.264 8-bit 4:2:0 caps on `cuda:0`: supported, 1 NVDEC, NV12 output,
   min `48x16`, max `4096x4096`, histogram support enabled with 256 bins.
+- H.264 64x64 NV12 decoder create/destroy passed through Rust and C ABI tests.
 
 For backend parity, generate a Python CUDA fixture, then compare Candle CUDA
 against it:
@@ -491,11 +494,15 @@ status = swm_cuda_image_ptr(image, &image_ptr, &image_pitch);
 status = swm_tdmpc2_reset_cuda_image(rt, image);
 SwmNvDecCaps nvdec_caps = {0};
 status = swm_nvdec_query_420("cuda:0", SWM_NVDEC_CODEC_H264, 0, &nvdec_caps);
+SwmNvDecDecoder *nvdec = NULL;
+status = swm_nvdec_decoder_create_420(
+    "cuda:0", SWM_NVDEC_CODEC_H264, 64, 64, 20, 2, &nvdec);
 status = swm_tdmpc2_reset_state_pixels(
     rt, state_f32, pixels_f32, batch, state_dim, image_size, image_size,
     SWM_PIXEL_LAYOUT_NCHW);
 status = swm_tdmpc2_plan_cem(rt, cem_cfg, action_out, sequence_out, best_cost_out);
 status = swm_tdmpc2_plan_icem(rt, icem_cfg, action_out, sequence_out, best_cost_out);
+swm_nvdec_decoder_free(nvdec);
 swm_tdmpc2_free(rt);
 
 SwmLeWm *lewm = NULL;
@@ -526,7 +533,7 @@ goal with `swm_lewm_set_goal_pixels` or a CUDA media goal-history entrypoint
 before calling a LeWM planner entrypoint.
 
 Latest local C ABI validation after adding CUDA media handles, reset
-entrypoints, and NVDECODE capability probing, run on 2026-06-01:
+entrypoints, and NVDECODE capability/decoder lifecycle, run on 2026-06-01:
 
 - `cargo check --locked --all-targets` passed.
 - `cargo test --locked --test ffi -- --nocapture` passed.
@@ -583,8 +590,8 @@ checkpoint plus config.
 ## Remaining Work
 
 - Add compact fixture integration tests once small public test weights are available.
-- Add NVDECODE parser/decoder sessions that write directly into Rust-owned
-  CUDA NV12 buffers.
+- Add NVDECODE parser callbacks and frame mapping that write decoded frames into
+  Rust-owned CUDA NV12 buffers.
 - Add TD-MPC2 policy rollout sampling.
 - Add planner buffer reuse/preallocation for lower steady-state allocation cost.
 - Add safetensors export guidance for deployments that prefer mmap loading.

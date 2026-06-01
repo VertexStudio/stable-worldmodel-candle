@@ -1,11 +1,12 @@
 use std::{ffi::CString, ffi::c_void, ptr};
 
 use stable_worldmodel_candle::ffi::{
-    SwmCudaImage, SwmCudaNv12, SwmIcemPlanConfig, SwmLeWm, SwmNvDecCaps, SwmStatus, SwmTdMpc2,
-    swm_cuda_image_alloc, swm_cuda_image_free, swm_cuda_image_ptr, swm_cuda_nv12_alloc,
-    swm_cuda_nv12_free, swm_cuda_nv12_uv_ptr, swm_cuda_nv12_y_ptr, swm_last_error_message,
-    swm_lewm_clear_icem_warm_start, swm_lewm_free, swm_lewm_load, swm_lewm_plan_cem,
-    swm_lewm_reset_cuda_image_history, swm_lewm_reset_pixels, swm_lewm_set_goal_pixels,
+    SwmCudaImage, SwmCudaNv12, SwmIcemPlanConfig, SwmLeWm, SwmNvDecCaps, SwmNvDecDecoder,
+    SwmStatus, SwmTdMpc2, swm_cuda_image_alloc, swm_cuda_image_free, swm_cuda_image_ptr,
+    swm_cuda_nv12_alloc, swm_cuda_nv12_free, swm_cuda_nv12_uv_ptr, swm_cuda_nv12_y_ptr,
+    swm_last_error_message, swm_lewm_clear_icem_warm_start, swm_lewm_free, swm_lewm_load,
+    swm_lewm_plan_cem, swm_lewm_reset_cuda_image_history, swm_lewm_reset_pixels,
+    swm_lewm_set_goal_pixels, swm_nvdec_decoder_create_420, swm_nvdec_decoder_free,
     swm_nvdec_query_420, swm_tdmpc2_clear_icem_warm_start, swm_tdmpc2_free, swm_tdmpc2_load,
     swm_tdmpc2_plan_icem, swm_tdmpc2_reset_cuda_image, swm_tdmpc2_reset_pixels,
     swm_tdmpc2_reset_state_pixels,
@@ -63,6 +64,7 @@ fn ffi_free_accepts_null() {
         swm_lewm_free(ptr::null_mut());
         swm_cuda_image_free(ptr::null_mut());
         swm_cuda_nv12_free(ptr::null_mut());
+        swm_nvdec_decoder_free(ptr::null_mut());
     }
 }
 
@@ -146,6 +148,31 @@ fn ffi_nvdec_query_420_rejects_unknown_codec() {
 
     assert_eq!(status, SwmStatus::RuntimeError);
     assert!(last_error().contains("unknown NVDECODE codec"));
+}
+
+#[test]
+fn ffi_nvdec_decoder_create_420_allocates_decoder() {
+    let mut decoder: *mut SwmNvDecDecoder = ptr::null_mut();
+    let status =
+        unsafe { swm_nvdec_decoder_create_420(ptr::null(), 0, 64, 64, 20, 2, &mut decoder) };
+
+    assert_eq!(status, SwmStatus::Ok);
+    assert!(!decoder.is_null());
+
+    unsafe {
+        swm_nvdec_decoder_free(decoder);
+    }
+}
+
+#[test]
+fn ffi_nvdec_decoder_create_420_rejects_odd_dimensions() {
+    let mut decoder: *mut SwmNvDecDecoder = ptr::null_mut();
+    let status =
+        unsafe { swm_nvdec_decoder_create_420(ptr::null(), 0, 63, 64, 20, 2, &mut decoder) };
+
+    assert_eq!(status, SwmStatus::RuntimeError);
+    assert!(decoder.is_null());
+    assert!(last_error().contains("NVDECODE NV12 decoder dimensions must be even"));
 }
 
 #[test]

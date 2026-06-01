@@ -14,7 +14,7 @@ use crate::{
     media::{
         ImagePreprocess, ImagePreprocessor, Nv12ColorSpace, Nv12ImageShape, Nv12Preprocessor,
         PackedImageFormat, PackedImageShape, cuda_u8_tensor_device_ptr, nv12_tensors,
-        nvdec::{NvDecCodec, NvDecSurfaceFormat, query_caps_420},
+        nvdec::{NvDecCodec, NvDecDecoder, NvDecDecoderConfig, NvDecSurfaceFormat, query_caps_420},
         packed_u8_tensor,
     },
     models::{
@@ -174,6 +174,10 @@ pub struct SwmCudaNv12 {
     y_plane: Tensor,
     uv_plane: Tensor,
     shape: Nv12ImageShape,
+}
+
+pub struct SwmNvDecDecoder {
+    _decoder: NvDecDecoder,
 }
 
 #[unsafe(no_mangle)]
@@ -435,6 +439,44 @@ pub unsafe extern "C" fn swm_cuda_nv12_uv_ptr(
         }
         Ok(())
     })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_nvdec_decoder_create_420(
+    device: *const c_char,
+    codec: c_int,
+    width: usize,
+    height: usize,
+    decode_surfaces: usize,
+    output_surfaces: usize,
+    out: *mut *mut SwmNvDecDecoder,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let device = unsafe { optional_string(device)? }
+            .as_deref()
+            .unwrap_or("cuda:0")
+            .parse::<DeviceSpec>()
+            .map_err(FfiError::invalid)?
+            .resolve()
+            .map_err(FfiError::runtime)?;
+        let codec = NvDecCodec::try_from(codec as u32).map_err(FfiError::runtime)?;
+        let mut config = NvDecDecoderConfig::new(codec, width, height);
+        config.decode_surfaces = decode_surfaces;
+        config.output_surfaces = output_surfaces;
+        let decoder = NvDecDecoder::new_nv12(&device, config).map_err(FfiError::runtime)?;
+        let out = unsafe { required_mut(out, "out")? };
+        *out = Box::into_raw(Box::new(SwmNvDecDecoder { _decoder: decoder }));
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_nvdec_decoder_free(handle: *mut SwmNvDecDecoder) {
+    if !handle.is_null() {
+        unsafe {
+            drop(Box::from_raw(handle));
+        }
+    }
 }
 
 #[unsafe(no_mangle)]

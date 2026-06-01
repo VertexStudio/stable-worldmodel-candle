@@ -48,6 +48,9 @@ predictable and deployment practical.
 - NVDECODE capability probing now binds the Candle CUDA context and queries
   `libnvcuvid` for codec/chroma/bit-depth support; Rust and C ABI entrypoints
   cover 4:2:0 H.264/HEVC/AV1/VP9 probes.
+- NVDECODE decoder lifecycle now creates and destroys an 8-bit 4:2:0 CUVID
+  decoder with NV12 output on the Candle CUDA context; Rust and C ABI tests
+  cover H.264 decoder allocation.
 - The C ABI now exposes Rust-owned CUDA packed-image and NV12 media buffers,
   device pointer queries, and TD-MPC2/LeWM reset calls that preprocess those
   buffers before session reset.
@@ -149,7 +152,8 @@ Make image/video/state inputs first-class Rust runtime inputs.
   - NV12 Y/UV CUDA surface preprocessing for video frames;
   - C ABI CUDA media buffer allocation and pointer queries;
   - NVDECODE capability probing through `libnvcuvid`;
-  - NVDECODE parser/decoder sessions that write into CUDA NV12 buffers;
+  - NVDECODE decoder lifecycle on the Candle CUDA context;
+  - NVDECODE parser callbacks and frame mapping into CUDA NV12 buffers;
   - NPP or fused CUDA color conversion for additional YUV surface formats.
 - Add state/action preprocessing:
   - schema validation;

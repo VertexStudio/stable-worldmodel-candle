@@ -10,6 +10,7 @@ typedef struct SwmTdMpc2 SwmTdMpc2;
 typedef struct SwmLeWm SwmLeWm;
 typedef struct SwmCudaImage SwmCudaImage;
 typedef struct SwmCudaNv12 SwmCudaNv12;
+typedef struct SwmNvDecDecoder SwmNvDecDecoder;
 
 typedef enum SwmStatus {
   SWM_STATUS_OK = 0,
@@ -139,6 +140,16 @@ SwmStatus swm_nvdec_query_420(const char *device,
                               SwmNvDecCodec codec,
                               unsigned int bit_depth_minus_8,
                               SwmNvDecCaps *out);
+
+SwmStatus swm_nvdec_decoder_create_420(const char *device,
+                                       SwmNvDecCodec codec,
+                                       size_t width,
+                                       size_t height,
+                                       size_t decode_surfaces,
+                                       size_t output_surfaces,
+                                       SwmNvDecDecoder **out);
+
+void swm_nvdec_decoder_free(SwmNvDecDecoder *handle);
 
 SwmStatus swm_tdmpc2_state_dim(const SwmTdMpc2 *handle, size_t *out);
 
