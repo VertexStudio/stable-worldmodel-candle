@@ -10,7 +10,7 @@ pub mod nvjpeg;
 use std::fmt;
 
 use candle::{
-    CudaStorage, DType, Device, InplaceOp2, Layout, Result, Storage, Tensor,
+    CudaStorage, DType, Device, InplaceOp2, InplaceOp3, Layout, Result, Storage, Tensor,
     backend::BackendStorage,
     cuda::{
         WrapErr,
@@ -82,6 +82,56 @@ impl PackedImageFormat {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Nv12ImageShape {
+    pub batch: usize,
+    pub height: usize,
+    pub width: usize,
+}
+
+impl Nv12ImageShape {
+    pub fn new(batch: usize, height: usize, width: usize) -> Self {
+        Self {
+            batch,
+            height,
+            width,
+        }
+    }
+
+    fn validate(self) -> Result<()> {
+        if self.batch == 0 || self.height == 0 || self.width == 0 {
+            candle::bail!("NV12 CUDA image dimensions must be greater than zero");
+        }
+        if self.height % 2 != 0 || self.width % 2 != 0 {
+            candle::bail!(
+                "NV12 CUDA image dimensions must be even, got {}x{}",
+                self.height,
+                self.width
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nv12ColorSpace {
+    Bt601Video,
+    Bt709Video,
+    Bt601Full,
+    Bt709Full,
+}
+
+impl Nv12ColorSpace {
+    fn kernel_id(self) -> u32 {
+        match self {
+            Self::Bt601Video => 0,
+            Self::Bt709Video => 1,
+            Self::Bt601Full => 2,
+            Self::Bt709Full => 3,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CudaImagePreprocess {
     pub output_height: usize,
@@ -108,6 +158,81 @@ impl CudaImagePreprocess {
             candle::bail!("CUDA preprocess std values must be non-zero");
         }
         Ok(())
+    }
+}
+
+pub struct CudaNv12Preprocessor {
+    input_shape: Nv12ImageShape,
+    color_space: Nv12ColorSpace,
+    config: CudaImagePreprocess,
+    output: Tensor,
+}
+
+impl fmt::Debug for CudaNv12Preprocessor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CudaNv12Preprocessor")
+            .field("input_shape", &self.input_shape)
+            .field("color_space", &self.color_space)
+            .field("config", &self.config)
+            .field("output_shape", &self.output.shape())
+            .finish()
+    }
+}
+
+impl CudaNv12Preprocessor {
+    pub fn new(
+        device: &Device,
+        input_shape: Nv12ImageShape,
+        color_space: Nv12ColorSpace,
+        config: CudaImagePreprocess,
+    ) -> Result<Self> {
+        input_shape.validate()?;
+        config.validate()?;
+        if !device.is_cuda() {
+            candle::bail!("CudaNv12Preprocessor requires a CUDA Candle device");
+        }
+
+        let output = Tensor::zeros(
+            (
+                input_shape.batch,
+                3,
+                config.output_height,
+                config.output_width,
+            ),
+            DType::F32,
+            device,
+        )?;
+
+        Ok(Self {
+            input_shape,
+            color_space,
+            config,
+            output,
+        })
+    }
+
+    pub fn output(&self) -> &Tensor {
+        &self.output
+    }
+
+    pub fn input_shape(&self) -> Nv12ImageShape {
+        self.input_shape
+    }
+
+    pub fn config(&self) -> CudaImagePreprocess {
+        self.config
+    }
+
+    pub fn preprocess_nv12(&mut self, y_plane: &Tensor, uv_plane: &Tensor) -> Result<&Tensor> {
+        validate_nv12_tensors(y_plane, uv_plane, self.input_shape)?;
+        let op = Nv12ToNchwF32 {
+            input_shape: self.input_shape,
+            color_space: self.color_space,
+            config: self.config,
+            output_layout: CudaMediaOutputLayout::Latest,
+        };
+        self.output.inplace_op3(y_plane, uv_plane, &op)?;
+        Ok(&self.output)
     }
 }
 
@@ -177,6 +302,107 @@ impl CudaImagePreprocessor {
             output_layout: CudaMediaOutputLayout::Latest,
         };
         self.output.inplace_op2(input, &op)?;
+        Ok(&self.output)
+    }
+}
+
+pub struct CudaNv12HistoryPreprocessor {
+    input_shape: Nv12ImageShape,
+    color_space: Nv12ColorSpace,
+    config: CudaImagePreprocess,
+    history_len: usize,
+    output: Tensor,
+}
+
+impl fmt::Debug for CudaNv12HistoryPreprocessor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CudaNv12HistoryPreprocessor")
+            .field("input_shape", &self.input_shape)
+            .field("color_space", &self.color_space)
+            .field("config", &self.config)
+            .field("history_len", &self.history_len)
+            .field("output_shape", &self.output.shape())
+            .finish()
+    }
+}
+
+impl CudaNv12HistoryPreprocessor {
+    pub fn new(
+        device: &Device,
+        input_shape: Nv12ImageShape,
+        color_space: Nv12ColorSpace,
+        history_len: usize,
+        config: CudaImagePreprocess,
+    ) -> Result<Self> {
+        input_shape.validate()?;
+        config.validate()?;
+        if history_len == 0 {
+            candle::bail!("CUDA NV12 history length must be greater than zero");
+        }
+        if !device.is_cuda() {
+            candle::bail!("CudaNv12HistoryPreprocessor requires a CUDA Candle device");
+        }
+
+        let output = Tensor::zeros(
+            (
+                input_shape.batch,
+                history_len,
+                3,
+                config.output_height,
+                config.output_width,
+            ),
+            DType::F32,
+            device,
+        )?;
+
+        Ok(Self {
+            input_shape,
+            color_space,
+            config,
+            history_len,
+            output,
+        })
+    }
+
+    pub fn output(&self) -> &Tensor {
+        &self.output
+    }
+
+    pub fn input_shape(&self) -> Nv12ImageShape {
+        self.input_shape
+    }
+
+    pub fn history_len(&self) -> usize {
+        self.history_len
+    }
+
+    pub fn config(&self) -> CudaImagePreprocess {
+        self.config
+    }
+
+    pub fn preprocess_nv12_into_slot(
+        &mut self,
+        y_plane: &Tensor,
+        uv_plane: &Tensor,
+        history_slot: usize,
+    ) -> Result<&Tensor> {
+        validate_nv12_tensors(y_plane, uv_plane, self.input_shape)?;
+        if history_slot >= self.history_len {
+            candle::bail!(
+                "CUDA NV12 history slot {history_slot} is outside history_len {}",
+                self.history_len
+            );
+        }
+        let op = Nv12ToNchwF32 {
+            input_shape: self.input_shape,
+            color_space: self.color_space,
+            config: self.config,
+            output_layout: CudaMediaOutputLayout::History {
+                history_len: self.history_len,
+                history_slot,
+            },
+        };
+        self.output.inplace_op3(y_plane, uv_plane, &op)?;
         Ok(&self.output)
     }
 }
@@ -297,6 +523,36 @@ fn validate_input_tensor(input: &Tensor, shape: PackedImageShape) -> Result<()> 
     Ok(())
 }
 
+fn validate_nv12_tensors(y_plane: &Tensor, uv_plane: &Tensor, shape: Nv12ImageShape) -> Result<()> {
+    if !y_plane.device().is_cuda() || !uv_plane.device().is_cuda() {
+        candle::bail!("NV12 input tensors must live on a CUDA Candle device");
+    }
+    if y_plane.dtype() != DType::U8 || uv_plane.dtype() != DType::U8 {
+        candle::bail!(
+            "NV12 input tensors must use U8 dtype, got y={:?}, uv={:?}",
+            y_plane.dtype(),
+            uv_plane.dtype()
+        );
+    }
+    let expected_y = [shape.batch, shape.height, shape.width];
+    if y_plane.dims() != expected_y {
+        candle::bail!(
+            "NV12 Y plane shape mismatch: expected {:?}, got {:?}",
+            expected_y,
+            y_plane.dims()
+        );
+    }
+    let expected_uv = [shape.batch, shape.height / 2, shape.width / 2, 2];
+    if uv_plane.dims() != expected_uv {
+        candle::bail!(
+            "NV12 UV plane shape mismatch: expected {:?}, got {:?}",
+            expected_uv,
+            uv_plane.dims()
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PackedU8ToNchwF32 {
     input_shape: PackedImageShape,
@@ -311,6 +567,14 @@ enum CudaMediaOutputLayout {
         history_len: usize,
         history_slot: usize,
     },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Nv12ToNchwF32 {
+    input_shape: Nv12ImageShape,
+    color_space: Nv12ColorSpace,
+    config: CudaImagePreprocess,
+    output_layout: CudaMediaOutputLayout,
 }
 
 impl InplaceOp2 for PackedU8ToNchwF32 {
@@ -406,6 +670,105 @@ impl InplaceOp2 for PackedU8ToNchwF32 {
     }
 }
 
+impl InplaceOp3 for Nv12ToNchwF32 {
+    fn name(&self) -> &'static str {
+        "nv12-to-nchw-f32"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _output: &mut candle::CpuStorage,
+        _output_layout: &Layout,
+        _y_plane: &candle::CpuStorage,
+        _y_layout: &Layout,
+        _uv_plane: &candle::CpuStorage,
+        _uv_layout: &Layout,
+    ) -> Result<()> {
+        candle::bail!("nv12-to-nchw-f32 is a CUDA media operation")
+    }
+
+    fn cuda_fwd(
+        &self,
+        output: &mut CudaStorage,
+        output_layout: &Layout,
+        y_plane: &CudaStorage,
+        y_layout: &Layout,
+        uv_plane: &CudaStorage,
+        uv_layout: &Layout,
+    ) -> Result<()> {
+        validate_nv12_output_layout(
+            output,
+            output_layout,
+            self.input_shape,
+            self.config,
+            self.output_layout,
+        )?;
+        validate_nv12_y_layout(y_plane, y_layout, self.input_shape)?;
+        validate_nv12_uv_layout(uv_plane, uv_layout, self.input_shape)?;
+
+        let cuda = output.device.clone();
+        let y_plane = y_plane.as_cuda_slice::<u8>()?;
+        let uv_plane = uv_plane.as_cuda_slice::<u8>()?;
+        let mut output = output.as_cuda_slice_mut::<f32>()?;
+        let y_plane = contiguous_slice(y_plane, y_layout, "NV12 Y plane")?;
+        let uv_plane = contiguous_slice(uv_plane, uv_layout, "NV12 UV plane")?;
+        let mut output = contiguous_slice_mut(&mut output, output_layout, "model image output")?;
+
+        let ptx = nvrtc::safe::compile_ptx_with_opts(
+            NV12_TO_NCHW_F32_CUDA,
+            nvrtc::CompileOptions {
+                use_fast_math: Some(true),
+                ..Default::default()
+            },
+        )
+        .w()?;
+        let func = cuda.get_or_load_custom_func(
+            "swm_nv12_to_nchw_f32",
+            "swm_cuda_nv12_preprocess",
+            &ptx.to_src(),
+        )?;
+
+        let pixel_count =
+            self.input_shape.batch * self.config.output_height * self.config.output_width;
+        let cfg = LaunchConfig::for_num_elems(pixel_count as u32);
+        let pixel_count_u32 = pixel_count as u32;
+        let batch = self.input_shape.batch as u32;
+        let in_h = self.input_shape.height as u32;
+        let in_w = self.input_shape.width as u32;
+        let out_h = self.config.output_height as u32;
+        let out_w = self.config.output_width as u32;
+        let color_space = self.color_space.kernel_id();
+        let (history_len, history_slot) = match self.output_layout {
+            CudaMediaOutputLayout::Latest => (0u32, 0u32),
+            CudaMediaOutputLayout::History {
+                history_len,
+                history_slot,
+            } => (history_len as u32, history_slot as u32),
+        };
+        let mut builder = func.builder();
+        builder.arg(&y_plane);
+        builder.arg(&uv_plane);
+        builder.arg(&mut output);
+        builder.arg(&pixel_count_u32);
+        builder.arg(&batch);
+        builder.arg(&in_h);
+        builder.arg(&in_w);
+        builder.arg(&out_h);
+        builder.arg(&out_w);
+        builder.arg(&color_space);
+        builder.arg(&history_len);
+        builder.arg(&history_slot);
+        builder.arg(&self.config.mean[0]);
+        builder.arg(&self.config.mean[1]);
+        builder.arg(&self.config.mean[2]);
+        builder.arg(&self.config.std[0]);
+        builder.arg(&self.config.std[1]);
+        builder.arg(&self.config.std[2]);
+        unsafe { builder.launch(cfg) }.w()?;
+        Ok(())
+    }
+}
+
 fn validate_output_layout(
     output: &CudaStorage,
     layout: &Layout,
@@ -442,6 +805,42 @@ fn validate_output_layout(
     Ok(())
 }
 
+fn validate_nv12_output_layout(
+    output: &CudaStorage,
+    layout: &Layout,
+    input_shape: Nv12ImageShape,
+    config: CudaImagePreprocess,
+    output_layout: CudaMediaOutputLayout,
+) -> Result<()> {
+    if output.dtype() != DType::F32 {
+        candle::bail!("CUDA NV12 output tensor must use F32 dtype");
+    }
+    let expected = match output_layout {
+        CudaMediaOutputLayout::Latest => vec![
+            input_shape.batch,
+            3,
+            config.output_height,
+            config.output_width,
+        ],
+        CudaMediaOutputLayout::History { history_len, .. } => vec![
+            input_shape.batch,
+            history_len,
+            3,
+            config.output_height,
+            config.output_width,
+        ],
+    };
+    if layout.dims() != expected {
+        candle::bail!(
+            "CUDA NV12 output shape mismatch: expected {:?}, got {:?}",
+            expected,
+            layout.dims()
+        );
+    }
+    require_contiguous(layout, "CUDA NV12 output")?;
+    Ok(())
+}
+
 fn validate_input_layout(
     input: &CudaStorage,
     layout: &Layout,
@@ -464,6 +863,51 @@ fn validate_input_layout(
         );
     }
     require_contiguous(layout, "CUDA media input")?;
+    Ok(())
+}
+
+fn validate_nv12_y_layout(
+    input: &CudaStorage,
+    layout: &Layout,
+    input_shape: Nv12ImageShape,
+) -> Result<()> {
+    if input.dtype() != DType::U8 {
+        candle::bail!("CUDA NV12 Y plane must use U8 dtype");
+    }
+    let expected = [input_shape.batch, input_shape.height, input_shape.width];
+    if layout.dims() != expected {
+        candle::bail!(
+            "CUDA NV12 Y plane shape mismatch: expected {:?}, got {:?}",
+            expected,
+            layout.dims()
+        );
+    }
+    require_contiguous(layout, "CUDA NV12 Y plane")?;
+    Ok(())
+}
+
+fn validate_nv12_uv_layout(
+    input: &CudaStorage,
+    layout: &Layout,
+    input_shape: Nv12ImageShape,
+) -> Result<()> {
+    if input.dtype() != DType::U8 {
+        candle::bail!("CUDA NV12 UV plane must use U8 dtype");
+    }
+    let expected = [
+        input_shape.batch,
+        input_shape.height / 2,
+        input_shape.width / 2,
+        2,
+    ];
+    if layout.dims() != expected {
+        candle::bail!(
+            "CUDA NV12 UV plane shape mismatch: expected {:?}, got {:?}",
+            expected,
+            layout.dims()
+        );
+    }
+    require_contiguous(layout, "CUDA NV12 UV plane")?;
     Ok(())
 }
 
@@ -517,6 +961,41 @@ pub fn packed_u8_tensor_from_host(
         (shape.batch, shape.height, shape.width, shape.channels()),
         device,
     )
+}
+
+pub fn nv12_tensors_from_host(
+    y_plane: &[u8],
+    uv_plane: &[u8],
+    shape: Nv12ImageShape,
+    device: &Device,
+) -> Result<(Tensor, Tensor)> {
+    shape.validate()?;
+    if !device.is_cuda() {
+        candle::bail!("nv12_tensors_from_host requires a CUDA Candle device");
+    }
+    let expected_y = shape.batch * shape.height * shape.width;
+    if y_plane.len() != expected_y {
+        candle::bail!(
+            "NV12 Y plane has {} bytes, expected {}",
+            y_plane.len(),
+            expected_y
+        );
+    }
+    let expected_uv = shape.batch * (shape.height / 2) * (shape.width / 2) * 2;
+    if uv_plane.len() != expected_uv {
+        candle::bail!(
+            "NV12 UV plane has {} bytes, expected {}",
+            uv_plane.len(),
+            expected_uv
+        );
+    }
+    let y = Tensor::from_slice(y_plane, (shape.batch, shape.height, shape.width), device)?;
+    let uv = Tensor::from_slice(
+        uv_plane,
+        (shape.batch, shape.height / 2, shape.width / 2, 2),
+        device,
+    )?;
+    Ok((y, uv))
 }
 
 pub fn tensor_from_cuda_slice_f32(
@@ -611,6 +1090,145 @@ extern "C" __global__ void swm_packed_u8_to_nchw_f32(
 }
 "#;
 
+const NV12_TO_NCHW_F32_CUDA: &str = r#"
+__device__ float swm_clamp(float value, float low, float high) {
+    return fminf(fmaxf(value, low), high);
+}
+
+__device__ float swm_sample_plane(
+    const unsigned char* __restrict__ plane,
+    unsigned int b,
+    unsigned int h,
+    unsigned int w,
+    unsigned int channels,
+    unsigned int channel,
+    float src_y,
+    float src_x
+) {
+    src_y = swm_clamp(src_y, 0.0f, (float)(h - 1u));
+    src_x = swm_clamp(src_x, 0.0f, (float)(w - 1u));
+    unsigned int y0 = (unsigned int)floorf(src_y);
+    unsigned int x0 = (unsigned int)floorf(src_x);
+    unsigned int y1 = y0 + 1u < h ? y0 + 1u : y0;
+    unsigned int x1 = x0 + 1u < w ? x0 + 1u : x0;
+    float wy = src_y - (float)y0;
+    float wx = src_x - (float)x0;
+
+    unsigned int base00 = (((b * h + y0) * w + x0) * channels + channel);
+    unsigned int base01 = (((b * h + y0) * w + x1) * channels + channel);
+    unsigned int base10 = (((b * h + y1) * w + x0) * channels + channel);
+    unsigned int base11 = (((b * h + y1) * w + x1) * channels + channel);
+
+    float v00 = (float)plane[base00];
+    float v01 = (float)plane[base01];
+    float v10 = (float)plane[base10];
+    float v11 = (float)plane[base11];
+    float top = v00 + (v01 - v00) * wx;
+    float bottom = v10 + (v11 - v10) * wx;
+    return top + (bottom - top) * wy;
+}
+
+extern "C" __global__ void swm_nv12_to_nchw_f32(
+    const unsigned char* __restrict__ y_plane,
+    const unsigned char* __restrict__ uv_plane,
+    float* __restrict__ output,
+    unsigned int pixel_count,
+    unsigned int batch,
+    unsigned int in_h,
+    unsigned int in_w,
+    unsigned int out_h,
+    unsigned int out_w,
+    unsigned int color_space,
+    unsigned int history_len,
+    unsigned int history_slot,
+    float mean0,
+    float mean1,
+    float mean2,
+    float std0,
+    float std1,
+    float std2
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= pixel_count) {
+        return;
+    }
+
+    unsigned int x = idx % out_w;
+    unsigned int tmp = idx / out_w;
+    unsigned int y = tmp % out_h;
+    unsigned int b = tmp / out_h;
+    if (b >= batch) {
+        return;
+    }
+
+    float src_y = ((float)y + 0.5f) * ((float)in_h / (float)out_h) - 0.5f;
+    float src_x = ((float)x + 0.5f) * ((float)in_w / (float)out_w) - 0.5f;
+    float y_value = swm_sample_plane(y_plane, b, in_h, in_w, 1u, 0u, src_y, src_x);
+    float u_value = swm_sample_plane(
+        uv_plane,
+        b,
+        in_h / 2u,
+        in_w / 2u,
+        2u,
+        0u,
+        src_y * 0.5f,
+        src_x * 0.5f
+    ) - 128.0f;
+    float v_value = swm_sample_plane(
+        uv_plane,
+        b,
+        in_h / 2u,
+        in_w / 2u,
+        2u,
+        1u,
+        src_y * 0.5f,
+        src_x * 0.5f
+    ) - 128.0f;
+
+    float r;
+    float g;
+    float blue;
+    if (color_space == 0u) {
+        float yy = fmaxf(y_value - 16.0f, 0.0f) * 1.16438356f;
+        r = yy + 1.59602678f * v_value;
+        g = yy - 0.39176229f * u_value - 0.81296765f * v_value;
+        blue = yy + 2.01723214f * u_value;
+    } else if (color_space == 1u) {
+        float yy = fmaxf(y_value - 16.0f, 0.0f) * 1.16438356f;
+        r = yy + 1.79274107f * v_value;
+        g = yy - 0.21324861f * u_value - 0.53290933f * v_value;
+        blue = yy + 2.11240179f * u_value;
+    } else if (color_space == 2u) {
+        r = y_value + 1.402f * v_value;
+        g = y_value - 0.344136f * u_value - 0.714136f * v_value;
+        blue = y_value + 1.772f * u_value;
+    } else {
+        r = y_value + 1.5748f * v_value;
+        g = y_value - 0.187324f * u_value - 0.468124f * v_value;
+        blue = y_value + 1.8556f * u_value;
+    }
+
+    float values[3] = {
+        swm_clamp(r, 0.0f, 255.0f) * 0.00392156862745098f,
+        swm_clamp(g, 0.0f, 255.0f) * 0.00392156862745098f,
+        swm_clamp(blue, 0.0f, 255.0f) * 0.00392156862745098f,
+    };
+    float means[3] = { mean0, mean1, mean2 };
+    float stds[3] = { std0, std1, std2 };
+
+    for (unsigned int c = 0u; c < 3u; c++) {
+        float normalized = (values[c] - means[c]) / stds[c];
+        unsigned int out_idx;
+        if (history_len == 0u) {
+            out_idx = (((b * 3u + c) * out_h + y) * out_w + x);
+        } else {
+            out_idx = ((((b * history_len + history_slot) * 3u + c) * out_h + y) * out_w + x);
+        }
+        output[out_idx] = normalized;
+    }
+}
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,6 +1293,67 @@ mod tests {
             assert!(
                 diff <= 1e-6,
                 "output[{idx}] expected {expected}, got {actual}, diff {diff}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn preprocesses_nv12_to_nchw_on_cuda() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let shape = Nv12ImageShape::new(1, 2, 2);
+        let (y_plane, uv_plane) =
+            nv12_tensors_from_host(&[0, 0, 0, 0], &[128, 128], shape, &device)?;
+        let config = CudaImagePreprocess {
+            output_height: 2,
+            output_width: 2,
+            mean: [0.0, 0.0, 0.0],
+            std: [1.0, 1.0, 1.0],
+        };
+        let mut preprocessor =
+            CudaNv12Preprocessor::new(&device, shape, Nv12ColorSpace::Bt601Full, config)?;
+        let output = preprocessor.preprocess_nv12(&y_plane, &uv_plane)?;
+        let actual = output.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(actual.len(), 12);
+        for (idx, actual) in actual.iter().enumerate() {
+            assert!(
+                actual.abs() <= 1e-6,
+                "output[{idx}] expected 0.0, got {actual}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn preprocesses_nv12_into_history_slot_on_cuda() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let shape = Nv12ImageShape::new(1, 2, 2);
+        let (y_plane, uv_plane) =
+            nv12_tensors_from_host(&[255, 255, 255, 255], &[128, 128], shape, &device)?;
+        let config = CudaImagePreprocess {
+            output_height: 2,
+            output_width: 2,
+            mean: [0.0, 0.0, 0.0],
+            std: [1.0, 1.0, 1.0],
+        };
+        let mut preprocessor =
+            CudaNv12HistoryPreprocessor::new(&device, shape, Nv12ColorSpace::Bt709Full, 2, config)?;
+        let output = preprocessor.preprocess_nv12_into_slot(&y_plane, &uv_plane, 1)?;
+        let actual = output.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(actual.len(), 24);
+
+        for (idx, actual) in actual.iter().take(12).enumerate() {
+            assert!(
+                actual.abs() <= 1e-6,
+                "output[{idx}] expected 0.0, got {actual}"
+            );
+        }
+        for (offset, actual) in actual.iter().skip(12).enumerate() {
+            let idx = offset + 12;
+            let diff = (actual - 1.0).abs();
+            assert!(
+                diff <= 1e-6,
+                "output[{idx}] expected 1.0, got {actual}, diff {diff}"
             );
         }
         Ok(())

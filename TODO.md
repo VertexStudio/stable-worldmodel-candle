@@ -40,6 +40,9 @@ predictable and deployment practical.
 - CUDA media ingestion now decodes JPEG bytes through nvJPEG into Candle CUDA
   U8 RGB tensors and preprocesses packed U8 RGB/BGR/RGBA/BGRA CUDA tensors into
   normalized F32 NCHW or NTCHW Candle tensors.
+- CUDA NV12 preprocessing now converts CUDA-resident Y and UV planes through
+  fused BT.601/BT.709 color conversion, resize, normalization, and NCHW/history
+  writes for video-surface ingestion.
 - `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
   and TD-MPC2 paths, including TD-MPC2 CEM/MPPI/iCEM planning latency.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
@@ -140,8 +143,9 @@ Make image/video/state inputs first-class Rust runtime inputs.
   - reusable CUDA RGB decode buffers;
   - fused Candle CUDA resize/channel/normalize kernels;
   - history-slot writes for LeWM/video frame windows;
+  - NV12 Y/UV CUDA surface preprocessing for video frames;
   - NVDEC video frame decode into CUDA buffers;
-  - NPP or fused CUDA color conversion for NV12/YUV video surfaces.
+  - NPP or fused CUDA color conversion for additional YUV surface formats.
 - Add state/action preprocessing:
   - schema validation;
   - action scaling and clamping;

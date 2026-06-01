@@ -180,17 +180,25 @@ packed U8 RGB/BGR/RGBA/BGRA CUDA tensor
   -> F32 NCHW Candle CUDA tensor
 ```
 
+For video-surface ingestion, `CudaNv12Preprocessor` accepts CUDA-resident NV12
+planes as `Y [batch, height, width]` and `UV [batch, height / 2, width / 2, 2]`.
+It fuses BT.601/BT.709 YUV-to-RGB conversion, full/video range handling,
+bilinear resize, `/255`, mean/std normalization, and NCHW or history-slot
+writes in one CUDA kernel.
+
 `NvJpegDecoder::decode_rgb_interleaved_into` writes into caller-owned CUDA
 RGB buffers for reuse. `decode_preprocessed_nchw_into` decodes and preprocesses
 into a persistent `CudaImagePreprocessor` output. `CudaImageHistoryPreprocessor`
-writes the same decoded frame format into a selected `[batch, time, 3, height,
-width]` slot for LeWM image-history and video pipelines.
+and `CudaNv12HistoryPreprocessor` write decoded frame formats into selected
+`[batch, time, 3, height, width]` slots for LeWM image-history and video
+pipelines.
 
 Build and validate the NVIDIA JPEG path:
 
 ```bash
+cargo test --features cuda cuda_media -- --nocapture
 cargo check --features nvjpeg --all-targets
-cargo test --features nvjpeg decodes_jpeg_to_cuda_rgb_tensor -- --nocapture
+cargo test --features nvjpeg cuda_media -- --nocapture
 ```
 
 Set `CUDA_HOME` or `CUDA_PATH` when CUDA is installed outside the standard
