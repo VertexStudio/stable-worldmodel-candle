@@ -15,6 +15,10 @@ use stable_worldmodel_candle::{
         swm_tdmpc2_actor_mean_action, swm_tdmpc2_plan_cem, swm_tdmpc2_rollout_actor_mean,
         swm_tdmpc2_rollout_actor_sample,
     },
+    media::{
+        ImagePreprocess, ImagePreprocessor, Nv12ColorSpace, Nv12ImageShape, Nv12Preprocessor,
+        PackedImageFormat, PackedImageShape, nv12_tensors, packed_u8_tensor,
+    },
     models::{
         lewm::{LeWm, LeWmConfig},
         tdmpc2::{TdMpc2, TdMpc2Config},
@@ -169,6 +173,15 @@ fn bench_lewm(
         device,
     )?
     .to_dtype(dtype)?;
+    let media_config = ImagePreprocess::imagenet_224();
+    let media_frames = args.batch_size * history;
+    let packed_shape = PackedImageShape::new(media_frames, 224, 224, PackedImageFormat::Rgb);
+    let packed_pixels = packed_u8_tensor(packed_shape, device)?;
+    let mut packed_preprocessor = ImagePreprocessor::new(device, packed_shape, media_config)?;
+    let nv12_shape = Nv12ImageShape::new(media_frames, 224, 224);
+    let (nv12_y, nv12_uv) = nv12_tensors(nv12_shape, device)?;
+    let mut nv12_preprocessor =
+        Nv12Preprocessor::new(device, nv12_shape, Nv12ColorSpace::Bt709Video, media_config)?;
 
     let emb = model.encode_pixels(&pixels)?;
     let emb_init =
@@ -227,6 +240,14 @@ fn bench_lewm(
     };
 
     Ok(vec![
+        bench("media_packed", args, device, || {
+            packed_preprocessor.preprocess_packed_u8(&packed_pixels)?;
+            Ok(())
+        })?,
+        bench("media_nv12", args, device, || {
+            nv12_preprocessor.preprocess_nv12(&nv12_y, &nv12_uv)?;
+            Ok(())
+        })?,
         bench("encode", args, device, || {
             model.encode_pixels(&pixels)?;
             Ok(())
@@ -312,6 +333,25 @@ fn bench_tdmpc2(
         device,
     )?
     .to_dtype(dtype)?;
+    let media_size = 64usize;
+    let media_config = ImagePreprocess {
+        output_height: media_size,
+        output_width: media_size,
+        mean: [0.0, 0.0, 0.0],
+        std: [1.0, 1.0, 1.0],
+    };
+    let packed_shape = PackedImageShape::new(
+        args.batch_size,
+        media_size,
+        media_size,
+        PackedImageFormat::Rgb,
+    );
+    let packed_pixels = packed_u8_tensor(packed_shape, device)?;
+    let mut packed_preprocessor = ImagePreprocessor::new(device, packed_shape, media_config)?;
+    let nv12_shape = Nv12ImageShape::new(args.batch_size, media_size, media_size);
+    let (nv12_y, nv12_uv) = nv12_tensors(nv12_shape, device)?;
+    let mut nv12_preprocessor =
+        Nv12Preprocessor::new(device, nv12_shape, Nv12ColorSpace::Bt709Video, media_config)?;
 
     let session_model = TdMpc2::new(
         TdMpc2Config::state_only(args.state_dim, args.action_dim),
@@ -369,6 +409,14 @@ fn bench_tdmpc2(
     };
 
     Ok(vec![
+        bench("media_packed", args, device, || {
+            packed_preprocessor.preprocess_packed_u8(&packed_pixels)?;
+            Ok(())
+        })?,
+        bench("media_nv12", args, device, || {
+            nv12_preprocessor.preprocess_nv12(&nv12_y, &nv12_uv)?;
+            Ok(())
+        })?,
         bench("encode", args, device, || {
             model.encode_state(&state)?;
             Ok(())

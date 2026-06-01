@@ -445,26 +445,29 @@ cargo run --release --bin runtime-bench -- \
 The benchmark synchronizes the selected Candle device around timed sections, so
 CUDA timings include queued device work rather than just launch overhead.
 Current sections cover synthetic encode, dynamics where applicable,
-rollout or scoring, TD-MPC2 actor-mean and sampled policy rollouts, an
-end-to-end synthetic path, C ABI call rows, and planner latency for CEM, MPPI,
-and iCEM. Planner sections reuse reset sessions, so they measure the hot MPC
-loop after observation encoding has been cached.
+rollout or scoring, packed U8 and NV12 CUDA media preprocessing, TD-MPC2
+actor-mean and sampled policy rollouts, an end-to-end synthetic path, C ABI
+call rows, and planner latency for CEM, MPPI, and iCEM. Planner sections reuse
+reset sessions, so they measure the hot MPC loop after observation encoding has
+been cached. LeWM media rows preprocess `batch * history` 224x224 frames;
+TD-MPC2 media rows preprocess 64x64 batch frames.
 
-Latest local TD-MPC2 runtime validation after adding actor-mean policy rollout,
-run on 2026-06-01:
+Latest local runtime validation after adding CUDA media preprocessing benchmark
+rows, run on 2026-06-01:
 
+- `cargo check --locked --bin runtime-bench` passed.
 - `cargo test --locked -- --nocapture` passed.
 - `cargo check --locked --all-targets` passed.
 - CUDA smoke completed with
   `cargo run --locked --bin runtime-bench -- --model td-mpc2 --device cuda --warmup 0 --iters 1 --samples 4 --horizon 2 --planner-iterations 1`.
-  This debug smoke emitted `policy_rollout`, `policy_sample`,
-  `ffi_actor_mean`, `ffi_policy_roll`, `ffi_policy_samp`, `plan_cem`,
-  `ffi_plan_cem`, `plan_mppi`, and `plan_icem` sections; use the release
-  benchmark commands above for latency baselines.
+  This debug smoke emitted `media_packed`, `media_nv12`, `policy_rollout`,
+  `policy_sample`, `ffi_actor_mean`, `ffi_policy_roll`, `ffi_policy_samp`,
+  `plan_cem`, `ffi_plan_cem`, `plan_mppi`, and `plan_icem` sections; use the
+  release benchmark commands above for latency baselines.
 - LeWM CUDA smoke completed with
   `cargo run --locked --bin runtime-bench -- --model le-wm --device cuda --warmup 0 --iters 1 --samples 2 --horizon 3 --planner-iterations 1 --action-dim 2`.
-  This debug smoke emitted `ffi_plan_cem`, `ffi_plan_mppi`, and
-  `ffi_plan_icem` sections.
+  This debug smoke emitted `media_packed`, `media_nv12`, `ffi_plan_cem`,
+  `ffi_plan_mppi`, and `ffi_plan_icem` sections.
 
 ## Runtime Sessions
 

@@ -63,7 +63,8 @@ predictable and deployment practical.
   and NV12 preprocessor output tensors inside the runtime handle across
   matching calls.
 - `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
-  and TD-MPC2 paths, including TD-MPC2 CEM/MPPI/iCEM planning latency.
+  and TD-MPC2 paths, including packed-image/NV12 CUDA preprocessing and
+  TD-MPC2 CEM/MPPI/iCEM planning latency.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
 - TD-MPC2 actor-mean and stochastic sampled policy rollouts run through Candle
   CUDA tensors and are exposed through the Rust model API, session API,
@@ -295,6 +296,9 @@ overhead.
   planning.
 - `runtime-bench --model le-wm` reports representative LeWM C ABI planner rows
   for CEM, MPPI, and iCEM.
+- `runtime-bench` reports `media_packed` and `media_nv12` rows so image/video
+  ingestion kernels are tracked with the same p50/p95/p99 harness as model and
+  planner work.
 - TD-MPC2 sampled actor rollout uses explicit CUDA noise tensors for parity and
   generated Candle CUDA noise for deployment runs.
 - Planner seeded sampling now uses planner-owned cuRAND generators on the Candle
