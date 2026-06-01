@@ -59,7 +59,9 @@ predictable and deployment practical.
   opt-in real H.264 packet smoke test through `SWM_NVDEC_TEST_PACKET`.
 - The C ABI now exposes Rust-owned CUDA packed-image and NV12 media buffers,
   device pointer queries, and TD-MPC2/LeWM reset calls that preprocess those
-  buffers before session reset.
+  buffers before session reset. The CUDA media reset paths cache packed-image
+  and NV12 preprocessor output tensors inside the runtime handle across
+  matching calls.
 - `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
   and TD-MPC2 paths, including TD-MPC2 CEM/MPPI/iCEM planning latency.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.

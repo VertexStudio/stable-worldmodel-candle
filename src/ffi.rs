@@ -152,6 +152,8 @@ pub struct SwmTdMpc2 {
     state_dim: Option<usize>,
     image_size: Option<usize>,
     image_preprocess: Option<ImagePreprocess>,
+    packed_preprocessor: Option<ImagePreprocessor>,
+    nv12_preprocessor: Option<Nv12Preprocessor>,
     action_dim: usize,
     action_bounds: ActionBounds,
     icem_planner: Option<IcemPlanner>,
@@ -177,6 +179,8 @@ impl SwmTdMpc2 {
             state_dim: Some(state_dim),
             image_size: None,
             image_preprocess: None,
+            packed_preprocessor: None,
+            nv12_preprocessor: None,
             action_dim,
             action_bounds: ActionBounds::symmetric(action_dim, 1.0),
             icem_planner: None,
@@ -191,6 +195,8 @@ pub struct SwmLeWm {
     image_size: usize,
     history_size: usize,
     image_preprocess: ImagePreprocess,
+    packed_preprocessor: Option<ImagePreprocessor>,
+    nv12_preprocessor: Option<Nv12Preprocessor>,
     action_bounds: ActionBounds,
     icem_planner: Option<IcemPlanner>,
 }
@@ -223,6 +229,8 @@ impl SwmLeWm {
                 mean: [0.485, 0.456, 0.406],
                 std: [0.229, 0.224, 0.225],
             },
+            packed_preprocessor: None,
+            nv12_preprocessor: None,
             action_bounds: ActionBounds::symmetric(action_dim, 1.0),
             icem_planner: None,
         })
@@ -300,6 +308,8 @@ pub unsafe extern "C" fn swm_tdmpc2_load(
             state_dim,
             image_size,
             image_preprocess,
+            packed_preprocessor: None,
+            nv12_preprocessor: None,
             action_dim,
             action_bounds,
             icem_planner: None,
@@ -354,6 +364,8 @@ pub unsafe extern "C" fn swm_lewm_load(
             image_size,
             history_size,
             image_preprocess,
+            packed_preprocessor: None,
+            nv12_preprocessor: None,
             action_bounds,
             icem_planner: None,
         });
@@ -1401,7 +1413,7 @@ fn c_flag(value: bool) -> c_int {
     if value { 1 } else { 0 }
 }
 
-fn tdmpc2_preprocess_cuda_image(handle: &SwmTdMpc2, image: &SwmCudaImage) -> FfiResult<Tensor> {
+fn tdmpc2_preprocess_cuda_image(handle: &mut SwmTdMpc2, image: &SwmCudaImage) -> FfiResult<Tensor> {
     let Some(image_size) = handle.image_size else {
         return Err(FfiError::invalid(
             "TD-MPC2 artifact does not have a pixel observation",
@@ -1413,8 +1425,12 @@ fn tdmpc2_preprocess_cuda_image(handle: &SwmTdMpc2, image: &SwmCudaImage) -> Ffi
     let config = handle
         .image_preprocess
         .unwrap_or_else(|| image_preprocess_from_config(&PreprocessConfig::default(), image_size));
-    let mut preprocessor = ImagePreprocessor::new(handle.session.device(), image.shape, config)
-        .map_err(FfiError::runtime)?;
+    let preprocessor = cached_packed_preprocessor(
+        &mut handle.packed_preprocessor,
+        handle.session.device(),
+        image.shape,
+        config,
+    )?;
     let pixels = preprocessor
         .preprocess_packed_u8(&image.tensor)
         .map_err(FfiError::runtime)?
@@ -1423,7 +1439,7 @@ fn tdmpc2_preprocess_cuda_image(handle: &SwmTdMpc2, image: &SwmCudaImage) -> Ffi
 }
 
 fn tdmpc2_preprocess_cuda_nv12(
-    handle: &SwmTdMpc2,
+    handle: &mut SwmTdMpc2,
     nv12: &SwmCudaNv12,
     color_space: c_int,
 ) -> FfiResult<Tensor> {
@@ -1439,9 +1455,13 @@ fn tdmpc2_preprocess_cuda_nv12(
     let config = handle
         .image_preprocess
         .unwrap_or_else(|| image_preprocess_from_config(&PreprocessConfig::default(), image_size));
-    let mut preprocessor =
-        Nv12Preprocessor::new(handle.session.device(), nv12.shape, color_space, config)
-            .map_err(FfiError::runtime)?;
+    let preprocessor = cached_nv12_preprocessor(
+        &mut handle.nv12_preprocessor,
+        handle.session.device(),
+        nv12.shape,
+        color_space,
+        config,
+    )?;
     let pixels = preprocessor
         .preprocess_nv12(&nv12.y_plane, &nv12.uv_plane)
         .map_err(FfiError::runtime)?
@@ -1450,7 +1470,7 @@ fn tdmpc2_preprocess_cuda_nv12(
 }
 
 fn lewm_preprocess_cuda_image_history(
-    handle: &SwmLeWm,
+    handle: &mut SwmLeWm,
     image: &SwmCudaImage,
     batch: usize,
     time: usize,
@@ -1463,12 +1483,12 @@ fn lewm_preprocess_cuda_image_history(
         time,
         require_config_history,
     )?;
-    let mut preprocessor = ImagePreprocessor::new(
+    let preprocessor = cached_packed_preprocessor(
+        &mut handle.packed_preprocessor,
         handle.session.device(),
         image.shape,
         handle.image_preprocess,
-    )
-    .map_err(FfiError::runtime)?;
+    )?;
     let pixels = preprocessor
         .preprocess_packed_u8(&image.tensor)
         .map_err(FfiError::runtime)?
@@ -1478,7 +1498,7 @@ fn lewm_preprocess_cuda_image_history(
 }
 
 fn lewm_preprocess_cuda_nv12_history(
-    handle: &SwmLeWm,
+    handle: &mut SwmLeWm,
     nv12: &SwmCudaNv12,
     batch: usize,
     time: usize,
@@ -1493,19 +1513,64 @@ fn lewm_preprocess_cuda_nv12_history(
         require_config_history,
     )?;
     let color_space = Nv12ColorSpace::try_from(color_space as u32).map_err(FfiError::runtime)?;
-    let mut preprocessor = Nv12Preprocessor::new(
+    let preprocessor = cached_nv12_preprocessor(
+        &mut handle.nv12_preprocessor,
         handle.session.device(),
         nv12.shape,
         color_space,
         handle.image_preprocess,
-    )
-    .map_err(FfiError::runtime)?;
+    )?;
     let pixels = preprocessor
         .preprocess_nv12(&nv12.y_plane, &nv12.uv_plane)
         .map_err(FfiError::runtime)?
         .reshape((batch, time, 3usize, handle.image_size, handle.image_size))
         .map_err(FfiError::runtime)?;
     Ok(pixels)
+}
+
+fn cached_packed_preprocessor<'a>(
+    cache: &'a mut Option<ImagePreprocessor>,
+    device: &Device,
+    shape: PackedImageShape,
+    config: ImagePreprocess,
+) -> FfiResult<&'a mut ImagePreprocessor> {
+    let needs_new = match cache.as_ref() {
+        Some(preprocessor) => {
+            preprocessor.input_shape() != shape || preprocessor.config() != config
+        }
+        None => true,
+    };
+    if needs_new {
+        *cache = Some(ImagePreprocessor::new(device, shape, config).map_err(FfiError::runtime)?);
+    }
+    cache
+        .as_mut()
+        .ok_or_else(|| FfiError::runtime("CUDA packed-image preprocessor cache is empty"))
+}
+
+fn cached_nv12_preprocessor<'a>(
+    cache: &'a mut Option<Nv12Preprocessor>,
+    device: &Device,
+    shape: Nv12ImageShape,
+    color_space: Nv12ColorSpace,
+    config: ImagePreprocess,
+) -> FfiResult<&'a mut Nv12Preprocessor> {
+    let needs_new = match cache.as_ref() {
+        Some(preprocessor) => {
+            preprocessor.input_shape() != shape
+                || preprocessor.color_space() != color_space
+                || preprocessor.config() != config
+        }
+        None => true,
+    };
+    if needs_new {
+        *cache = Some(
+            Nv12Preprocessor::new(device, shape, color_space, config).map_err(FfiError::runtime)?,
+        );
+    }
+    cache
+        .as_mut()
+        .ok_or_else(|| FfiError::runtime("CUDA NV12 preprocessor cache is empty"))
 }
 
 fn validate_lewm_media_history(
@@ -1930,6 +1995,82 @@ mod tests {
     }
 
     #[test]
+    fn tdmpc2_cuda_media_preprocessors_reuse_outputs() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let dtype = DType::F32;
+        let action_dim = 1;
+        let model = TdMpc2::new(
+            TdMpc2Config::state_only(1, action_dim),
+            checkpoint::empty_var_builder(dtype, &device),
+        )?;
+        let session = TdMpc2Session::new(model, device.clone(), dtype);
+        let image_preprocess = ImagePreprocess {
+            output_height: 2,
+            output_width: 2,
+            mean: [0.0, 0.0, 0.0],
+            std: [1.0, 1.0, 1.0],
+        };
+        let mut handle = SwmTdMpc2 {
+            session,
+            state_dim: None,
+            image_size: Some(2),
+            image_preprocess: Some(image_preprocess),
+            packed_preprocessor: None,
+            nv12_preprocessor: None,
+            action_dim,
+            action_bounds: ActionBounds::symmetric(action_dim, 1.0),
+            icem_planner: None,
+        };
+
+        let packed_shape = PackedImageShape::new(1, 2, 2, PackedImageFormat::Rgb);
+        let packed_tensor = crate::media::packed_u8_tensor_from_host(
+            &[
+                255, 0, 0, //
+                0, 255, 0, //
+                0, 0, 255, //
+                255, 255, 255,
+            ],
+            packed_shape,
+            &device,
+        )?;
+        let packed_image = SwmCudaImage {
+            tensor: packed_tensor,
+            shape: packed_shape,
+        };
+        let packed_a = ffi_to_anyhow(tdmpc2_preprocess_cuda_image(&mut handle, &packed_image))?;
+        let packed_b = ffi_to_anyhow(tdmpc2_preprocess_cuda_image(&mut handle, &packed_image))?;
+        assert_eq!(packed_a.id(), packed_b.id());
+
+        let nv12_shape = Nv12ImageShape::new(1, 2, 2);
+        let (y_plane, uv_plane) =
+            crate::media::nv12_tensors_from_host(&[0, 0, 0, 0], &[128, 128], nv12_shape, &device)?;
+        let nv12 = SwmCudaNv12 {
+            y_plane,
+            uv_plane,
+            shape: nv12_shape,
+        };
+        let nv12_a = ffi_to_anyhow(tdmpc2_preprocess_cuda_nv12(
+            &mut handle,
+            &nv12,
+            Nv12ColorSpace::Bt601Full as c_int,
+        ))?;
+        let nv12_b = ffi_to_anyhow(tdmpc2_preprocess_cuda_nv12(
+            &mut handle,
+            &nv12,
+            Nv12ColorSpace::Bt601Full as c_int,
+        ))?;
+        assert_eq!(nv12_a.id(), nv12_b.id());
+
+        let nv12_c = ffi_to_anyhow(tdmpc2_preprocess_cuda_nv12(
+            &mut handle,
+            &nv12,
+            Nv12ColorSpace::Bt709Full as c_int,
+        ))?;
+        assert_ne!(nv12_b.id(), nv12_c.id());
+        Ok(())
+    }
+
+    #[test]
     fn tdmpc2_actor_policy_c_abi_writes_outputs() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let dtype = DType::F32;
@@ -1947,6 +2088,8 @@ mod tests {
             state_dim: Some(12),
             image_size: None,
             image_preprocess: None,
+            packed_preprocessor: None,
+            nv12_preprocessor: None,
             action_dim,
             action_bounds: ActionBounds::symmetric(action_dim, 1.0),
             icem_planner: None,
@@ -1979,5 +2122,9 @@ mod tests {
         assert_eq!(status, SwmStatus::Ok);
         assert!(sampled_actions.iter().all(|value| value.is_finite()));
         Ok(())
+    }
+
+    fn ffi_to_anyhow<T>(result: FfiResult<T>) -> anyhow::Result<T> {
+        result.map_err(|err| anyhow::anyhow!("{:?}: {}", err.status, err.message))
     }
 }

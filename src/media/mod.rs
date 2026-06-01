@@ -256,6 +256,10 @@ impl Nv12Preprocessor {
         self.config
     }
 
+    pub fn color_space(&self) -> Nv12ColorSpace {
+        self.color_space
+    }
+
     pub fn preprocess_nv12(&mut self, y_plane: &Tensor, uv_plane: &Tensor) -> Result<&Tensor> {
         validate_nv12_tensors(y_plane, uv_plane, self.input_shape)?;
         let op = Nv12ToNchwF32 {
@@ -411,6 +415,10 @@ impl Nv12HistoryPreprocessor {
 
     pub fn config(&self) -> ImagePreprocess {
         self.config
+    }
+
+    pub fn color_space(&self) -> Nv12ColorSpace {
+        self.color_space
     }
 
     pub fn preprocess_nv12_into_slot(

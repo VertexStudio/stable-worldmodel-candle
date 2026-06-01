@@ -269,6 +269,11 @@ SwmCudaImage / SwmCudaNv12
   -> session reset on model-ready Candle CUDA tensor
 ```
 
+TD-MPC2 and LeWM CUDA media reset entrypoints cache their packed-image and NV12
+preprocessor outputs inside the runtime handle. Repeated calls with the same
+shape, normalization config, and NV12 color space reuse the same Candle CUDA
+output tensor; incompatible media settings rebuild the cached preprocessor.
+
 NVDECODE capability probing is linked directly against `libnvcuvid`.
 `media::nvdec::query_caps_420` and `swm_nvdec_query_420` bind the same Candle
 CUDA context used by model inference, then query codec support for 4:2:0 video
@@ -557,9 +562,15 @@ status = swm_cuda_image_ptr(image, &image_ptr, &image_pitch);
 status = swm_tdmpc2_reset_cuda_image(rt, image);
 SwmNvDecCaps nvdec_caps = {0};
 status = swm_nvdec_query_420("cuda:0", SWM_NVDEC_CODEC_H264, 0, &nvdec_caps);
-SwmNvDecDecoder *nvdec = NULL;
-status = swm_nvdec_decoder_create_420(
-    "cuda:0", SWM_NVDEC_CODEC_H264, 64, 64, 20, 2, &nvdec);
+SwmCudaNv12 *nv12 = NULL;
+status = swm_cuda_nv12_alloc("cuda:0", 1, 64, 64, &nv12);
+SwmNvDecSession *nvdec_session = NULL;
+status = swm_nvdec_session_create_420(
+    "cuda:0", SWM_NVDEC_CODEC_H264, 64, 64, 20, 2, &nvdec_session);
+size_t decoded_frames = 0;
+status = swm_nvdec_session_decode_annexb_to_nv12(
+    nvdec_session, h264_annexb_bytes, h264_annexb_len, nv12, &decoded_frames);
+status = swm_tdmpc2_reset_cuda_nv12(rt, nv12, SWM_NV12_COLOR_SPACE_BT709_VIDEO);
 status = swm_tdmpc2_reset_state_pixels(
     rt, state_f32, pixels_f32, batch, state_dim, image_size, image_size,
     SWM_PIXEL_LAYOUT_NCHW);
@@ -568,7 +579,8 @@ status = swm_tdmpc2_rollout_actor_mean(rt, horizon, sequence_out, reward_out);
 status = swm_tdmpc2_rollout_actor_sample(rt, horizon, num_trajs, sequence_out);
 status = swm_tdmpc2_plan_cem(rt, cem_cfg, action_out, sequence_out, best_cost_out);
 status = swm_tdmpc2_plan_icem(rt, icem_cfg, action_out, sequence_out, best_cost_out);
-swm_nvdec_decoder_free(nvdec);
+swm_nvdec_session_free(nvdec_session);
+swm_cuda_nv12_free(nv12);
 swm_tdmpc2_free(rt);
 
 SwmLeWm *lewm = NULL;
@@ -589,20 +601,24 @@ statuses. The matching declarations live in
 tensors already resized and normalized for the model, with explicit NCHW or
 NHWC layout. `swm_tdmpc2_reset_cuda_image` and `swm_tdmpc2_reset_cuda_nv12`
 preprocess Rust-owned CUDA buffers using artifact preprocessing metadata before
-resetting the session. `swm_tdmpc2_plan_icem` keeps its shifted warm-start sequence inside
-the runtime handle; call `swm_tdmpc2_clear_icem_warm_start` when resetting an
-episode. `swm_lewm_reset_pixels` expects `[batch, time, 3, image_size,
-image_size]` f32 history tensors; `swm_lewm_reset_cuda_image_history` and
+resetting the session. Those CUDA media reset paths reuse their internal
+preprocessor output tensors across matching calls. `swm_tdmpc2_plan_icem` keeps
+its shifted warm-start sequence inside the runtime handle; call
+`swm_tdmpc2_clear_icem_warm_start` when resetting an episode.
+`swm_lewm_reset_pixels` expects `[batch, time, 3, image_size, image_size]` f32
+history tensors; `swm_lewm_reset_cuda_image_history` and
 `swm_lewm_reset_cuda_nv12_history` take packed CUDA media batches shaped as
 `batch * time` frames and preprocess them into the same history tensor. Set a
 goal with `swm_lewm_set_goal_pixels` or a CUDA media goal-history entrypoint
 before calling a LeWM planner entrypoint.
 
-Latest local C ABI validation after adding CUDA media handles, reset
-entrypoints, NVDECODE capability/decoder/parser lifecycle, and TD-MPC2 actor
-policy entrypoints including sampled actor rollout, run on 2026-06-01:
+Latest local C ABI validation after adding CUDA media handle preprocessor
+caches, public NVDEC parser-session declarations, NVDECODE capability, decoder
+and parser lifecycle, and TD-MPC2 actor policy entrypoints including sampled
+actor rollout, run on 2026-06-01:
 
 - `cargo check --locked --all-targets` passed.
+- `cargo test --locked ffi::tests::tdmpc2_cuda_media_preprocessors_reuse_outputs -- --nocapture` passed.
 - `cargo test --locked ffi::tests::tdmpc2_actor_policy_c_abi_writes_outputs -- --nocapture` passed.
 - `cargo test --locked ffi_actor -- --nocapture` passed.
 - `cargo test --locked ffi_rollout_actor -- --nocapture` passed.
