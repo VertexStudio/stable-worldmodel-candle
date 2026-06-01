@@ -133,14 +133,14 @@ impl Nv12ColorSpace {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CudaImagePreprocess {
+pub struct ImagePreprocess {
     pub output_height: usize,
     pub output_width: usize,
     pub mean: [f32; 3],
     pub std: [f32; 3],
 }
 
-impl CudaImagePreprocess {
+impl ImagePreprocess {
     pub fn imagenet_224() -> Self {
         Self {
             output_height: 224,
@@ -161,16 +161,16 @@ impl CudaImagePreprocess {
     }
 }
 
-pub struct CudaNv12Preprocessor {
+pub struct Nv12Preprocessor {
     input_shape: Nv12ImageShape,
     color_space: Nv12ColorSpace,
-    config: CudaImagePreprocess,
+    config: ImagePreprocess,
     output: Tensor,
 }
 
-impl fmt::Debug for CudaNv12Preprocessor {
+impl fmt::Debug for Nv12Preprocessor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CudaNv12Preprocessor")
+        f.debug_struct("Nv12Preprocessor")
             .field("input_shape", &self.input_shape)
             .field("color_space", &self.color_space)
             .field("config", &self.config)
@@ -179,17 +179,17 @@ impl fmt::Debug for CudaNv12Preprocessor {
     }
 }
 
-impl CudaNv12Preprocessor {
+impl Nv12Preprocessor {
     pub fn new(
         device: &Device,
         input_shape: Nv12ImageShape,
         color_space: Nv12ColorSpace,
-        config: CudaImagePreprocess,
+        config: ImagePreprocess,
     ) -> Result<Self> {
         input_shape.validate()?;
         config.validate()?;
         if !device.is_cuda() {
-            candle::bail!("CudaNv12Preprocessor requires a CUDA Candle device");
+            candle::bail!("Nv12Preprocessor requires a CUDA Candle device");
         }
 
         let output = Tensor::zeros(
@@ -219,7 +219,7 @@ impl CudaNv12Preprocessor {
         self.input_shape
     }
 
-    pub fn config(&self) -> CudaImagePreprocess {
+    pub fn config(&self) -> ImagePreprocess {
         self.config
     }
 
@@ -229,22 +229,22 @@ impl CudaNv12Preprocessor {
             input_shape: self.input_shape,
             color_space: self.color_space,
             config: self.config,
-            output_layout: CudaMediaOutputLayout::Latest,
+            output_layout: MediaOutputLayout::Latest,
         };
         self.output.inplace_op3(y_plane, uv_plane, &op)?;
         Ok(&self.output)
     }
 }
 
-pub struct CudaImagePreprocessor {
+pub struct ImagePreprocessor {
     input_shape: PackedImageShape,
-    config: CudaImagePreprocess,
+    config: ImagePreprocess,
     output: Tensor,
 }
 
-impl fmt::Debug for CudaImagePreprocessor {
+impl fmt::Debug for ImagePreprocessor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CudaImagePreprocessor")
+        f.debug_struct("ImagePreprocessor")
             .field("input_shape", &self.input_shape)
             .field("config", &self.config)
             .field("output_shape", &self.output.shape())
@@ -252,16 +252,16 @@ impl fmt::Debug for CudaImagePreprocessor {
     }
 }
 
-impl CudaImagePreprocessor {
+impl ImagePreprocessor {
     pub fn new(
         device: &Device,
         input_shape: PackedImageShape,
-        config: CudaImagePreprocess,
+        config: ImagePreprocess,
     ) -> Result<Self> {
         input_shape.validate()?;
         config.validate()?;
         if !device.is_cuda() {
-            candle::bail!("CudaImagePreprocessor requires a CUDA Candle device");
+            candle::bail!("ImagePreprocessor requires a CUDA Candle device");
         }
 
         let output = Tensor::zeros(
@@ -290,7 +290,7 @@ impl CudaImagePreprocessor {
         self.input_shape
     }
 
-    pub fn config(&self) -> CudaImagePreprocess {
+    pub fn config(&self) -> ImagePreprocess {
         self.config
     }
 
@@ -299,24 +299,24 @@ impl CudaImagePreprocessor {
         let op = PackedU8ToNchwF32 {
             input_shape: self.input_shape,
             config: self.config,
-            output_layout: CudaMediaOutputLayout::Latest,
+            output_layout: MediaOutputLayout::Latest,
         };
         self.output.inplace_op2(input, &op)?;
         Ok(&self.output)
     }
 }
 
-pub struct CudaNv12HistoryPreprocessor {
+pub struct Nv12HistoryPreprocessor {
     input_shape: Nv12ImageShape,
     color_space: Nv12ColorSpace,
-    config: CudaImagePreprocess,
+    config: ImagePreprocess,
     history_len: usize,
     output: Tensor,
 }
 
-impl fmt::Debug for CudaNv12HistoryPreprocessor {
+impl fmt::Debug for Nv12HistoryPreprocessor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CudaNv12HistoryPreprocessor")
+        f.debug_struct("Nv12HistoryPreprocessor")
             .field("input_shape", &self.input_shape)
             .field("color_space", &self.color_space)
             .field("config", &self.config)
@@ -326,13 +326,13 @@ impl fmt::Debug for CudaNv12HistoryPreprocessor {
     }
 }
 
-impl CudaNv12HistoryPreprocessor {
+impl Nv12HistoryPreprocessor {
     pub fn new(
         device: &Device,
         input_shape: Nv12ImageShape,
         color_space: Nv12ColorSpace,
         history_len: usize,
-        config: CudaImagePreprocess,
+        config: ImagePreprocess,
     ) -> Result<Self> {
         input_shape.validate()?;
         config.validate()?;
@@ -340,7 +340,7 @@ impl CudaNv12HistoryPreprocessor {
             candle::bail!("CUDA NV12 history length must be greater than zero");
         }
         if !device.is_cuda() {
-            candle::bail!("CudaNv12HistoryPreprocessor requires a CUDA Candle device");
+            candle::bail!("Nv12HistoryPreprocessor requires a CUDA Candle device");
         }
 
         let output = Tensor::zeros(
@@ -376,7 +376,7 @@ impl CudaNv12HistoryPreprocessor {
         self.history_len
     }
 
-    pub fn config(&self) -> CudaImagePreprocess {
+    pub fn config(&self) -> ImagePreprocess {
         self.config
     }
 
@@ -397,7 +397,7 @@ impl CudaNv12HistoryPreprocessor {
             input_shape: self.input_shape,
             color_space: self.color_space,
             config: self.config,
-            output_layout: CudaMediaOutputLayout::History {
+            output_layout: MediaOutputLayout::History {
                 history_len: self.history_len,
                 history_slot,
             },
@@ -407,16 +407,16 @@ impl CudaNv12HistoryPreprocessor {
     }
 }
 
-pub struct CudaImageHistoryPreprocessor {
+pub struct ImageHistoryPreprocessor {
     input_shape: PackedImageShape,
-    config: CudaImagePreprocess,
+    config: ImagePreprocess,
     history_len: usize,
     output: Tensor,
 }
 
-impl fmt::Debug for CudaImageHistoryPreprocessor {
+impl fmt::Debug for ImageHistoryPreprocessor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CudaImageHistoryPreprocessor")
+        f.debug_struct("ImageHistoryPreprocessor")
             .field("input_shape", &self.input_shape)
             .field("config", &self.config)
             .field("history_len", &self.history_len)
@@ -425,12 +425,12 @@ impl fmt::Debug for CudaImageHistoryPreprocessor {
     }
 }
 
-impl CudaImageHistoryPreprocessor {
+impl ImageHistoryPreprocessor {
     pub fn new(
         device: &Device,
         input_shape: PackedImageShape,
         history_len: usize,
-        config: CudaImagePreprocess,
+        config: ImagePreprocess,
     ) -> Result<Self> {
         input_shape.validate()?;
         config.validate()?;
@@ -438,7 +438,7 @@ impl CudaImageHistoryPreprocessor {
             candle::bail!("CUDA image history length must be greater than zero");
         }
         if !device.is_cuda() {
-            candle::bail!("CudaImageHistoryPreprocessor requires a CUDA Candle device");
+            candle::bail!("ImageHistoryPreprocessor requires a CUDA Candle device");
         }
 
         let output = Tensor::zeros(
@@ -473,7 +473,7 @@ impl CudaImageHistoryPreprocessor {
         self.history_len
     }
 
-    pub fn config(&self) -> CudaImagePreprocess {
+    pub fn config(&self) -> ImagePreprocess {
         self.config
     }
 
@@ -492,7 +492,7 @@ impl CudaImageHistoryPreprocessor {
         let op = PackedU8ToNchwF32 {
             input_shape: self.input_shape,
             config: self.config,
-            output_layout: CudaMediaOutputLayout::History {
+            output_layout: MediaOutputLayout::History {
                 history_len: self.history_len,
                 history_slot,
             },
@@ -556,12 +556,12 @@ fn validate_nv12_tensors(y_plane: &Tensor, uv_plane: &Tensor, shape: Nv12ImageSh
 #[derive(Debug, Clone, Copy)]
 struct PackedU8ToNchwF32 {
     input_shape: PackedImageShape,
-    config: CudaImagePreprocess,
-    output_layout: CudaMediaOutputLayout,
+    config: ImagePreprocess,
+    output_layout: MediaOutputLayout,
 }
 
 #[derive(Debug, Clone, Copy)]
-enum CudaMediaOutputLayout {
+enum MediaOutputLayout {
     Latest,
     History {
         history_len: usize,
@@ -573,8 +573,8 @@ enum CudaMediaOutputLayout {
 struct Nv12ToNchwF32 {
     input_shape: Nv12ImageShape,
     color_space: Nv12ColorSpace,
-    config: CudaImagePreprocess,
-    output_layout: CudaMediaOutputLayout,
+    config: ImagePreprocess,
+    output_layout: MediaOutputLayout,
 }
 
 impl InplaceOp2 for PackedU8ToNchwF32 {
@@ -624,7 +624,7 @@ impl InplaceOp2 for PackedU8ToNchwF32 {
         .w()?;
         let func = cuda.get_or_load_custom_func(
             "swm_packed_u8_to_nchw_f32",
-            "swm_cuda_media_preprocess",
+            "swm_media_preprocess",
             &ptx.to_src(),
         )?;
 
@@ -640,8 +640,8 @@ impl InplaceOp2 for PackedU8ToNchwF32 {
         let out_w = self.config.output_width as u32;
         let format = self.input_shape.format.kernel_id();
         let (history_len, history_slot) = match self.output_layout {
-            CudaMediaOutputLayout::Latest => (0u32, 0u32),
-            CudaMediaOutputLayout::History {
+            MediaOutputLayout::Latest => (0u32, 0u32),
+            MediaOutputLayout::History {
                 history_len,
                 history_slot,
             } => (history_len as u32, history_slot as u32),
@@ -739,8 +739,8 @@ impl InplaceOp3 for Nv12ToNchwF32 {
         let out_w = self.config.output_width as u32;
         let color_space = self.color_space.kernel_id();
         let (history_len, history_slot) = match self.output_layout {
-            CudaMediaOutputLayout::Latest => (0u32, 0u32),
-            CudaMediaOutputLayout::History {
+            MediaOutputLayout::Latest => (0u32, 0u32),
+            MediaOutputLayout::History {
                 history_len,
                 history_slot,
             } => (history_len as u32, history_slot as u32),
@@ -773,20 +773,20 @@ fn validate_output_layout(
     output: &CudaStorage,
     layout: &Layout,
     input_shape: PackedImageShape,
-    config: CudaImagePreprocess,
-    output_layout: CudaMediaOutputLayout,
+    config: ImagePreprocess,
+    output_layout: MediaOutputLayout,
 ) -> Result<()> {
     if output.dtype() != DType::F32 {
         candle::bail!("CUDA media output tensor must use F32 dtype");
     }
     let expected = match output_layout {
-        CudaMediaOutputLayout::Latest => vec![
+        MediaOutputLayout::Latest => vec![
             input_shape.batch,
             3,
             config.output_height,
             config.output_width,
         ],
-        CudaMediaOutputLayout::History { history_len, .. } => vec![
+        MediaOutputLayout::History { history_len, .. } => vec![
             input_shape.batch,
             history_len,
             3,
@@ -809,20 +809,20 @@ fn validate_nv12_output_layout(
     output: &CudaStorage,
     layout: &Layout,
     input_shape: Nv12ImageShape,
-    config: CudaImagePreprocess,
-    output_layout: CudaMediaOutputLayout,
+    config: ImagePreprocess,
+    output_layout: MediaOutputLayout,
 ) -> Result<()> {
     if output.dtype() != DType::F32 {
         candle::bail!("CUDA NV12 output tensor must use F32 dtype");
     }
     let expected = match output_layout {
-        CudaMediaOutputLayout::Latest => vec![
+        MediaOutputLayout::Latest => vec![
             input_shape.batch,
             3,
             config.output_height,
             config.output_width,
         ],
-        CudaMediaOutputLayout::History { history_len, .. } => vec![
+        MediaOutputLayout::History { history_len, .. } => vec![
             input_shape.batch,
             history_len,
             3,
@@ -1247,13 +1247,13 @@ mod tests {
             shape,
             &device,
         )?;
-        let config = CudaImagePreprocess {
+        let config = ImagePreprocess {
             output_height: 2,
             output_width: 2,
             mean: [0.0, 0.0, 0.0],
             std: [1.0, 1.0, 1.0],
         };
-        let mut preprocessor = CudaImagePreprocessor::new(&device, shape, config)?;
+        let mut preprocessor = ImagePreprocessor::new(&device, shape, config)?;
         let output = preprocessor.preprocess_packed_u8(&input)?;
         let actual = output.flatten_all()?.to_vec1::<f32>()?;
         let expected = [
@@ -1277,13 +1277,13 @@ mod tests {
         let device = Device::new_cuda(0)?;
         let shape = PackedImageShape::new(1, 1, 1, PackedImageFormat::Bgr);
         let input = packed_u8_tensor_from_host(&[0, 128, 255], shape, &device)?;
-        let config = CudaImagePreprocess {
+        let config = ImagePreprocess {
             output_height: 1,
             output_width: 1,
             mean: [0.0, 0.0, 0.0],
             std: [1.0, 1.0, 1.0],
         };
-        let mut preprocessor = CudaImageHistoryPreprocessor::new(&device, shape, 3, config)?;
+        let mut preprocessor = ImageHistoryPreprocessor::new(&device, shape, 3, config)?;
         let output = preprocessor.preprocess_packed_u8_into_slot(&input, 1)?;
         let actual = output.flatten_all()?.to_vec1::<f32>()?;
         let expected = [0.0, 0.0, 0.0, 1.0, 128.0 / 255.0, 0.0, 0.0, 0.0, 0.0];
@@ -1304,14 +1304,14 @@ mod tests {
         let shape = Nv12ImageShape::new(1, 2, 2);
         let (y_plane, uv_plane) =
             nv12_tensors_from_host(&[0, 0, 0, 0], &[128, 128], shape, &device)?;
-        let config = CudaImagePreprocess {
+        let config = ImagePreprocess {
             output_height: 2,
             output_width: 2,
             mean: [0.0, 0.0, 0.0],
             std: [1.0, 1.0, 1.0],
         };
         let mut preprocessor =
-            CudaNv12Preprocessor::new(&device, shape, Nv12ColorSpace::Bt601Full, config)?;
+            Nv12Preprocessor::new(&device, shape, Nv12ColorSpace::Bt601Full, config)?;
         let output = preprocessor.preprocess_nv12(&y_plane, &uv_plane)?;
         let actual = output.flatten_all()?.to_vec1::<f32>()?;
         assert_eq!(actual.len(), 12);
@@ -1330,14 +1330,14 @@ mod tests {
         let shape = Nv12ImageShape::new(1, 2, 2);
         let (y_plane, uv_plane) =
             nv12_tensors_from_host(&[255, 255, 255, 255], &[128, 128], shape, &device)?;
-        let config = CudaImagePreprocess {
+        let config = ImagePreprocess {
             output_height: 2,
             output_width: 2,
             mean: [0.0, 0.0, 0.0],
             std: [1.0, 1.0, 1.0],
         };
         let mut preprocessor =
-            CudaNv12HistoryPreprocessor::new(&device, shape, Nv12ColorSpace::Bt709Full, 2, config)?;
+            Nv12HistoryPreprocessor::new(&device, shape, Nv12ColorSpace::Bt709Full, 2, config)?;
         let output = preprocessor.preprocess_nv12_into_slot(&y_plane, &uv_plane, 1)?;
         let actual = output.flatten_all()?.to_vec1::<f32>()?;
         assert_eq!(actual.len(), 24);

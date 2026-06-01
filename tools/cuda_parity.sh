@@ -5,7 +5,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SWM_ROOT="${STABLE_WORLDMODEL_ROOT:-}"
 MODEL="${MODEL:-quentinll/lewm-pusht}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
-CPU_FIXTURE="${CPU_FIXTURE:-"$ROOT/target/lewm-pusht-python-cpu.npz"}"
 CUDA_FIXTURE="${CUDA_FIXTURE:-"$ROOT/target/lewm-pusht-python-cuda.npz"}"
 RUN_CUDNN="${RUN_CUDNN:-auto}"
 CARGO_LOCKED="${CARGO_LOCKED:-1}"
@@ -93,33 +92,12 @@ case "$RUN_CUDNN" in
     ;;
 esac
 
-section "Python LeWM fixtures"
-run_python "$ROOT/tools/export_lewm_fixture.py" \
-  "${swm_root_args[@]}" \
-  --model "$MODEL" \
-  --device cpu \
-  --output "$CPU_FIXTURE"
+section "Python LeWM CUDA fixture"
 run_python "$ROOT/tools/export_lewm_fixture.py" \
   "${swm_root_args[@]}" \
   --model "$MODEL" \
   --device cuda \
   --output "$CUDA_FIXTURE"
-
-section "Python CPU vs Python CUDA"
-run_python "$ROOT/tools/compare_npz.py" \
-  "$CPU_FIXTURE" "$CUDA_FIXTURE" \
-  --left-label python-cpu \
-  --right-label python-cuda
-
-section "Candle CPU vs Python CPU"
-(
-  cd "$ROOT"
-  cargo run --release "${cargo_locked_args[@]}" --features hub \
-    --bin lewm-compare-fixture -- \
-    --device cpu \
-    --fixture "$CPU_FIXTURE" \
-    --hf-repo "$MODEL"
-)
 
 section "Candle CUDA vs Python CUDA"
 (
@@ -128,15 +106,5 @@ section "Candle CUDA vs Python CUDA"
     --bin lewm-compare-fixture -- \
     --device cuda \
     --fixture "$CUDA_FIXTURE" \
-    --hf-repo "$MODEL"
-)
-
-section "Candle CUDA vs Python CPU"
-(
-  cd "$ROOT"
-  cargo run --release "${cargo_locked_args[@]}" --features 'cuda hub' \
-    --bin lewm-compare-fixture -- \
-    --device cuda \
-    --fixture "$CPU_FIXTURE" \
     --hf-repo "$MODEL"
 )

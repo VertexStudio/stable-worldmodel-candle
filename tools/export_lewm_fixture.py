@@ -34,9 +34,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument(
         "--device",
-        choices=("cpu", "cuda"),
-        default="cpu",
-        help="backend used for model inference; inputs are generated on CPU and copied to this device",
+        choices=("cuda",),
+        default="cuda",
+        help="CUDA backend used for model inference; inputs are generated on host and copied to this device",
     )
     return parser.parse_args()
 
@@ -62,8 +62,8 @@ def main() -> None:
     torch.backends.cudnn.allow_tf32 = False
     torch.backends.cudnn.benchmark = False
 
-    if args.device == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("--device cuda requested, but torch.cuda.is_available() is false")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA fixture export requires torch.cuda.is_available()")
     device = torch.device(args.device)
 
     model = load_pretrained(args.model, cache_dir=args.cache_dir).to(device).eval()

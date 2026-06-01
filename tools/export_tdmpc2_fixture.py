@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
         or os.environ.get("STABLE_WORLDMODEL_PY"),
         help="local stable-worldmodel source tree to prepend to PYTHONPATH",
     )
-    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    parser.add_argument("--device", choices=("cuda",), default="cuda")
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--horizon", type=int, default=3)
@@ -98,8 +98,8 @@ def main() -> None:
     torch.backends.cudnn.allow_tf32 = False
     torch.backends.cudnn.benchmark = False
 
-    if args.device == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("--device cuda requested, but torch.cuda.is_available() is false")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA fixture export requires torch.cuda.is_available()")
     device = torch.device(args.device)
 
     model = TDMPC2(cfg(args)).eval()

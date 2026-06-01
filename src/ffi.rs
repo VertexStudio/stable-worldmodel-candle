@@ -157,7 +157,7 @@ pub unsafe extern "C" fn swm_tdmpc2_load(
         let artifact_dir = unsafe { required_string(artifact_dir, "artifact_dir")? };
         let device = unsafe { optional_string(device)? }
             .as_deref()
-            .unwrap_or("cpu")
+            .unwrap_or("cuda:0")
             .parse::<DeviceSpec>()
             .map_err(FfiError::invalid)?
             .resolve()
@@ -206,7 +206,7 @@ pub unsafe extern "C" fn swm_lewm_load(
         let artifact_dir = unsafe { required_string(artifact_dir, "artifact_dir")? };
         let device = unsafe { optional_string(device)? }
             .as_deref()
-            .unwrap_or("cpu")
+            .unwrap_or("cuda:0")
             .parse::<DeviceSpec>()
             .map_err(FfiError::invalid)?
             .resolve()

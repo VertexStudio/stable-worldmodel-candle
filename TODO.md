@@ -31,15 +31,15 @@ predictable and deployment practical.
 ## Current State
 
 - LeWM image-model implementation exists.
-- LeWM Python/Candle CPU/CUDA parity exists through `tools/cuda_parity.sh`.
-- TD-MPC2 state/vector inference and CPU/CUDA fixture parity exist.
+- LeWM Python/Candle CUDA parity exists through `tools/cuda_parity.sh`.
+- TD-MPC2 state/vector inference and CUDA fixture parity exist.
 - Python parity tooling now runs from this repo's `pyproject.toml`/`uv.lock`
   and depends on the official `stable-worldmodel[train]` package.
-- TD-MPC2 pixel CNN inference exists for NCHW/NHWC image tensors with CPU/CUDA
-  fixture parity for pixel-only and CPU fixture parity for mixed pixel+state.
+- TD-MPC2 pixel CNN inference exists for NCHW/NHWC image tensors with CUDA
+  fixture parity for pixel-only and mixed pixel+state.
 - Rust preprocessing exists for decoded RGB frame stacks, latest-frame pixel
   tensors, normalized state arrays, and clamped action arrays.
-- CUDA media ingestion now decodes JPEG bytes through nvJPEG into Candle CUDA
+- `media` ingestion now decodes JPEG bytes through nvJPEG into Candle CUDA
   U8 RGB tensors and preprocesses packed U8 RGB/BGR/RGBA/BGRA CUDA tensors into
   normalized F32 NCHW or NTCHW Candle tensors.
 - CUDA NV12 preprocessing now converts CUDA-resident Y and UV planes through
@@ -69,19 +69,14 @@ Make current behavior measurable before optimizing it.
 
 - Keep `tools/cuda_parity.sh` as the LeWM CUDA validation path.
 - Add TD-MPC2 state/vector fixture parity:
-  - Python CPU vs Python CUDA.
-  - Candle CPU vs Python CPU.
   - Candle CUDA vs Python CUDA.
-  - Candle CUDA vs Python CPU.
 - Add shared runtime parsing for device and dtype choices:
-  - CPU.
-  - CUDA device index when built with `cuda`.
-  - Metal device index when built with `metal`.
+  - CUDA device index.
   - F32 first; BF16/F16 only when explicitly requested and supported.
 - Add `runtime-bench`:
   - benchmark preprocessing, encode, dynamics, rollout, candidate scoring, and
     full planning once planners exist;
-  - call `Device::synchronize()` before and after timed CUDA/Metal sections;
+  - call `Device::synchronize()` before and after timed CUDA sections;
   - report p50, p95, p99, mean, warmup count, iteration count, model, device,
     dtype, batch size, frame/history count, candidate samples, horizon, and git
     commit;
@@ -89,8 +84,8 @@ Make current behavior measurable before optimizing it.
 
 **Done When**
 
-- LeWM parity still passes on CPU and CUDA.
-- TD-MPC2 state/vector parity passes on CPU and CUDA.
+- LeWM parity passes on CUDA.
+- TD-MPC2 state/vector parity passes on CUDA.
 - `runtime-bench` can run against synthetic LeWM and TD-MPC2 inputs.
 - Benchmark output is reproducible enough to compare before/after changes.
 
@@ -276,7 +271,7 @@ overhead.
   MPPI use a configured action, while iCEM prefers its warm-start sequence
   before using the configured action. `PlanResult` reports which path was used.
 - Planner configs expose a seed for deterministic host-generated
-  candidate noise that is moved to the selected Candle device, giving CPU/CUDA
+  candidate noise that is moved to the selected Candle device, giving CUDA
   planner tests a repeatable sampling path while leaving deployment defaults
   backend-native.
 

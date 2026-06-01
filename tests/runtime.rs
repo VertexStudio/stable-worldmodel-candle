@@ -5,20 +5,16 @@ use stable_worldmodel_candle::runtime::{DTypeSpec, DeviceSpec};
 
 #[test]
 fn parses_device_specs() {
-    assert_eq!(DeviceSpec::from_str("cpu").unwrap(), DeviceSpec::Cpu);
     assert_eq!(DeviceSpec::from_str("cuda").unwrap(), DeviceSpec::Cuda(0));
     assert_eq!(DeviceSpec::from_str("cuda:2").unwrap(), DeviceSpec::Cuda(2));
-    assert_eq!(DeviceSpec::from_str("metal").unwrap(), DeviceSpec::Metal(0));
-    assert_eq!(
-        DeviceSpec::from_str("metal:1").unwrap(),
-        DeviceSpec::Metal(1)
-    );
 }
 
 #[test]
 fn rejects_invalid_device_specs() {
+    assert!(DeviceSpec::from_str("cpu").is_err());
     assert!(DeviceSpec::from_str("cuda:").is_err());
     assert!(DeviceSpec::from_str("cuda:abc").is_err());
+    assert!(DeviceSpec::from_str("metal").is_err());
     assert!(DeviceSpec::from_str("gpu").is_err());
 }
 

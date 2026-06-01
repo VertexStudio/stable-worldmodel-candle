@@ -6,33 +6,27 @@ use candle::{DType, Device, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceSpec {
-    Cpu,
     Cuda(usize),
-    Metal(usize),
 }
 
 impl DeviceSpec {
     pub fn resolve(self) -> Result<Device> {
         match self {
-            Self::Cpu => Ok(Device::Cpu),
             Self::Cuda(index) => cuda_device(index),
-            Self::Metal(index) => metal_device(index),
         }
     }
 }
 
 impl Default for DeviceSpec {
     fn default() -> Self {
-        Self::Cpu
+        Self::Cuda(0)
     }
 }
 
 impl fmt::Display for DeviceSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Cpu => f.write_str("cpu"),
             Self::Cuda(index) => write!(f, "cuda:{index}"),
-            Self::Metal(index) => write!(f, "metal:{index}"),
         }
     }
 }
@@ -43,21 +37,16 @@ impl FromStr for DeviceSpec {
     fn from_str(input: &str) -> std::result::Result<Self, Self::Err> {
         let input = input.trim().to_ascii_lowercase();
         match input.as_str() {
-            "cpu" => return Ok(Self::Cpu),
             "cuda" => return Ok(Self::Cuda(0)),
-            "metal" => return Ok(Self::Metal(0)),
             _ => {}
         }
 
         if let Some(index) = parse_index(&input, "cuda:")? {
             return Ok(Self::Cuda(index));
         }
-        if let Some(index) = parse_index(&input, "metal:")? {
-            return Ok(Self::Metal(index));
-        }
 
         Err(format!(
-            "unsupported device '{input}', expected cpu, cuda, cuda:<index>, metal, or metal:<index>"
+            "unsupported device '{input}', expected cuda or cuda:<index>"
         ))
     }
 }
@@ -130,14 +119,4 @@ fn cuda_device(index: usize) -> Result<Device> {
 #[cfg(not(feature = "cuda"))]
 fn cuda_device(_index: usize) -> Result<Device> {
     candle::bail!("CUDA device requested, but this crate was built without --features cuda")
-}
-
-#[cfg(feature = "metal")]
-fn metal_device(index: usize) -> Result<Device> {
-    Device::new_metal(index)
-}
-
-#[cfg(not(feature = "metal"))]
-fn metal_device(_index: usize) -> Result<Device> {
-    candle::bail!("Metal device requested, but this crate was built without --features metal")
 }

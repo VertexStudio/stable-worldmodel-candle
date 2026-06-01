@@ -1,8 +1,3 @@
-#[cfg(feature = "accelerate")]
-extern crate accelerate_src;
-#[cfg(feature = "mkl")]
-extern crate intel_mkl_src;
-
 use std::path::PathBuf;
 
 use candle::{DType, Tensor};
@@ -43,7 +38,7 @@ struct Args {
     #[arg(long, default_value_t = 4)]
     action_dim: usize,
 
-    #[arg(long, default_value_t = DeviceSpec::Cpu)]
+    #[arg(long, default_value_t = DeviceSpec::Cuda(0))]
     device: DeviceSpec,
 
     #[arg(long, default_value_t = 1e-4)]

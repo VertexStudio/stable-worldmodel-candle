@@ -54,8 +54,8 @@ To export a deterministic Python fixture from the official implementation:
 uv run --python 3.12 --no-dev \
   python tools/export_lewm_fixture.py \
   --model quentinll/lewm-pusht \
-  --device cpu \
-  --output target/lewm-pusht-fixture.npz
+  --device cuda \
+  --output target/lewm-pusht-fixture-cuda.npz
 ```
 
 For local upstream development, pass `--stable-worldmodel-root /path/to/source`
@@ -65,7 +65,8 @@ Then compare Candle outputs against the Python fixture:
 
 ```bash
 cargo run --bin lewm-compare-fixture -- \
-  --fixture target/lewm-pusht-fixture.npz \
+  --device cuda:0 \
+  --fixture target/lewm-pusht-fixture-cuda.npz \
   --weights ~/.stable_worldmodel/checkpoints/models--quentinll--lewm-pusht/weights.pt \
   --config ~/.stable_worldmodel/checkpoints/models--quentinll--lewm-pusht/config.json
 ```
@@ -74,7 +75,8 @@ Or let Rust download the same HF files through Candle-style hub support:
 
 ```bash
 cargo run --features hub --bin lewm-compare-fixture -- \
-  --fixture target/lewm-pusht-fixture.npz \
+  --device cuda:0 \
+  --fixture target/lewm-pusht-fixture-cuda.npz \
   --hf-repo quentinll/lewm-pusht
 ```
 
@@ -87,12 +89,13 @@ both an `.npz` fixture and a `.pt` state dict:
 ```bash
 uv run --python 3.12 --no-dev \
   python tools/export_tdmpc2_fixture.py \
-  --device cpu \
-  --output target/tdmpc2-state-python-cpu.npz \
+  --device cuda \
+  --output target/tdmpc2-state-python-cuda.npz \
   --weights-output target/tdmpc2-state-weights.pt
 
 cargo run --bin tdmpc2-compare-fixture -- \
-  --fixture target/tdmpc2-state-python-cpu.npz \
+  --device cuda:0 \
+  --fixture target/tdmpc2-state-python-cuda.npz \
   --weights target/tdmpc2-state-weights.pt
 ```
 
@@ -103,12 +106,13 @@ fixtures:
 uv run --python 3.12 --no-dev \
   python tools/export_tdmpc2_fixture.py \
   --fixture-kind pixel \
-  --device cpu \
-  --output target/tdmpc2-pixel-python-cpu.npz \
+  --device cuda \
+  --output target/tdmpc2-pixel-python-cuda.npz \
   --weights-output target/tdmpc2-pixel-weights.pt
 
 cargo run --bin tdmpc2-compare-fixture -- \
-  --fixture target/tdmpc2-pixel-python-cpu.npz \
+  --device cuda:0 \
+  --fixture target/tdmpc2-pixel-python-cuda.npz \
   --weights target/tdmpc2-pixel-weights.pt \
   --fixture-kind pixel
 ```
@@ -121,13 +125,13 @@ Self-contained Python tooling validation, run on 2026-06-01:
 - `uv lock --locked` passed with `stable-worldmodel[train]` from PyPI.
 - `uv run --locked --python 3.12 --no-dev python ...` imported
   `stable_worldmodel` from this repo's `.venv`.
-- `tools/export_tdmpc2_fixture.py` generated a CPU state fixture using only this
+- `tools/export_tdmpc2_fixture.py` generated a CUDA state fixture using only this
   repo's locked Python environment.
 - `cargo run --locked --bin tdmpc2-compare-fixture -- --fixture
-  target/tdmpc2-self-contained-python-cpu.npz --weights
-  target/tdmpc2-self-contained-weights.pt` passed with max abs diffs:
-  `z=2.38e-7`, `next_z=2.38e-7`, `reward_logits=0`, `actor_mean=7.64e-8`,
-  `cost=3.81e-6`, and stable cost argmin.
+  target/tdmpc2-self-contained-python-cuda.npz --weights
+  target/tdmpc2-self-contained-weights.pt --device cuda:0` passed with max abs diffs:
+  `z=8.94e-8`, `next_z=1.49e-7`, `reward_logits=0`, `actor_mean=1.19e-7`,
+  `cost=0`, and stable cost argmin.
 
 ## Deployment Artifacts
 
@@ -160,7 +164,7 @@ SimNorm.
 
 ## NVIDIA Media Runtime
 
-CUDA builds expose `cuda_media` for NVIDIA media ingestion. With the `nvjpeg`
+CUDA builds expose `media` for NVIDIA media ingestion. With the `nvjpeg`
 feature enabled, JPEG bytes are decoded by NVIDIA nvJPEG directly into a
 Candle CUDA `U8` tensor on Candle's CUDA stream, then the fused CUDA
 preprocessor produces model-ready tensors:
@@ -185,7 +189,7 @@ packed U8 RGB/BGR/RGBA/BGRA CUDA tensor
   -> F32 NCHW Candle CUDA tensor
 ```
 
-For video-surface ingestion, `CudaNv12Preprocessor` accepts CUDA-resident NV12
+For video-surface ingestion, `Nv12Preprocessor` accepts CUDA-resident NV12
 planes as `Y [batch, height, width]` and `UV [batch, height / 2, width / 2, 2]`.
 It fuses BT.601/BT.709 YUV-to-RGB conversion, full/video range handling,
 bilinear resize, `/255`, mean/std normalization, and NCHW or history-slot
@@ -193,75 +197,54 @@ writes in one CUDA kernel.
 
 `NvJpegDecoder::decode_rgb_interleaved_into` writes into caller-owned CUDA
 RGB buffers for reuse. `decode_preprocessed_nchw_into` decodes and preprocesses
-into a persistent `CudaImagePreprocessor` output. `CudaImageHistoryPreprocessor`
-and `CudaNv12HistoryPreprocessor` write decoded frame formats into selected
+into a persistent `ImagePreprocessor` output. `ImageHistoryPreprocessor`
+and `Nv12HistoryPreprocessor` write decoded frame formats into selected
 `[batch, time, 3, height, width]` slots for LeWM image-history and video
 pipelines.
 
 Build and validate the NVIDIA JPEG path:
 
 ```bash
-cargo test --features cuda cuda_media -- --nocapture
+cargo test --features cuda media -- --nocapture
 cargo check --features nvjpeg --all-targets
-cargo test --features nvjpeg cuda_media -- --nocapture
+cargo test --features nvjpeg media -- --nocapture
 ```
 
 Set `CUDA_HOME` or `CUDA_PATH` when CUDA is installed outside the standard
 `/usr/local/cuda*` locations so Cargo can find `libnvjpeg.so`.
 
-For backend parity, generate CPU and CUDA Python fixtures from identical CPU
-input tensors, then compare them before comparing Candle:
+For backend parity, generate a Python CUDA fixture, then compare Candle CUDA
+against it:
 
 ```bash
-uv run --python 3.12 --no-dev \
-  python tools/export_lewm_fixture.py \
-  --model quentinll/lewm-pusht \
-  --device cpu \
-  --output target/lewm-pusht-python-cpu.npz
-
 uv run --python 3.12 --no-dev \
   python tools/export_lewm_fixture.py \
   --model quentinll/lewm-pusht \
   --device cuda \
   --output target/lewm-pusht-python-cuda.npz
 
-uv run --python 3.12 --no-dev \
-  python tools/compare_npz.py \
-  target/lewm-pusht-python-cpu.npz \
-  target/lewm-pusht-python-cuda.npz \
-  --left-label python-cpu \
-  --right-label python-cuda
+cargo run --release --features hub --bin lewm-compare-fixture -- \
+  --device cuda:0 \
+  --fixture target/lewm-pusht-python-cuda.npz \
+  --hf-repo quentinll/lewm-pusht
 ```
 
 The fixture exporter disables TF32 matmul/cuDNN paths, disables cuDNN
 benchmarking, runs with gradients off, and exports model outputs after
 `model.eval()`.
 
-## Platform Builds
+## NVIDIA Build
 
-Default CPU build, portable on macOS and Linux:
+CUDA is the default backend:
 
 ```bash
 cargo check --all-targets
 ```
 
-macOS Accelerate:
+Run a CUDA smoke:
 
 ```bash
-cargo check --features accelerate --all-targets
-```
-
-macOS Metal:
-
-```bash
-cargo check --features metal --all-targets
-```
-
-Linux CUDA:
-
-```bash
-cargo check --features cuda --all-targets
-cargo run --release --features cuda --bin lewm-inspect -- \
+cargo run --release --bin lewm-inspect -- \
   --device cuda \
   --weights /path/to/weights_epoch_100.pt \
   --action-dim 2
@@ -280,10 +263,9 @@ tools/cuda_parity.sh
 ```
 
 The matrix runs environment sanity checks, Rust CUDA build/tests, cuDNN checks
-when detected, Python CPU-vs-CUDA fixture diffs, Candle CPU vs
-Python CPU, Candle CUDA vs Python CUDA, and Candle CUDA vs Python CPU. Set
-`MODEL`, `CPU_FIXTURE`, `CUDA_FIXTURE`, `PYTHON_VERSION`, `RUN_CUDNN`, or
-`CARGO_LOCKED=0` to override defaults. Set `STABLE_WORLDMODEL_ROOT` only when
+when detected, Python CUDA fixture export, and Candle CUDA vs Python CUDA. Set
+`MODEL`, `CUDA_FIXTURE`, `PYTHON_VERSION`, `RUN_CUDNN`, or `CARGO_LOCKED=0`
+to override defaults. Set `STABLE_WORLDMODEL_ROOT` only when
 testing a local Python source tree instead of the locked package.
 
 Default parity tolerances are per-output: `act_emb=1e-5`, `emb=1e-3`,
@@ -302,32 +284,13 @@ Latest local CUDA parity result, run on 2026-05-29:
 
 | Comparison | `emb` max abs | `act_emb` max abs | `pred` max abs | `rollout` max abs | `cost` max abs | Cost argmin |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| Python CPU vs Python CUDA | `2.622604e-06` | `9.536743e-07` | `2.563000e-06` | `2.622604e-06` | `4.196167e-05` | stable |
-| Candle CPU vs Python CPU | `2.178848e-04` | `1.192093e-06` | `4.816353e-04` | `6.887764e-04` | `4.620552e-03` | stable |
 | Candle CUDA vs Python CUDA | `2.174266e-04` | `4.768372e-07` | `4.823357e-04` | `6.892309e-04` | `4.647255e-03` | stable |
-| Candle CUDA vs Python CPU | `2.185255e-04` | `9.536743e-07` | `4.818588e-04` | `6.889254e-04` | `4.620552e-03` | stable |
-
-For the Python CPU/CUDA fixture comparison, `pixels`, `actions`, and
-`action_candidates` were byte-identical because inputs are generated on CPU
-before being copied to the selected backend.
 
 Latest local TD-MPC2 pixel parity result, run on 2026-05-29:
 
-- Python CPU vs Python CUDA fixture drift: `z=1.490116e-08`,
-  `next_z=1.490116e-07`, `actor_mean=1.639128e-07`, `cost=0`, cost argmin
-  stable.
-- Candle CPU vs Python CPU pixel fixture: `z=2.980232e-08`,
-  `next_z=2.384186e-07`, `actor_mean=4.470348e-07`,
-  `cost=1.907349e-06`, cost argmin stable.
 - Candle CUDA vs Python CUDA pixel fixture: `z=2.235174e-08`,
   `next_z=1.490116e-07`, `actor_mean=2.682209e-07`, `cost=0`, cost argmin
   stable.
-- Candle CPU vs Python CPU mixed pixel+state fixture: `z=1.192093e-07`,
-  `next_z=6.258488e-07`, `actor_mean=2.607703e-07`,
-  `cost=1.907349e-06`, cost argmin stable.
-- Python CPU vs Python CUDA mixed pixel+state fixture drift:
-  `z=1.490116e-07`, `next_z=4.470348e-07`, `actor_mean=1.713634e-07`,
-  `cost=0`, cost argmin stable.
 - Candle CUDA vs Python CUDA mixed pixel+state fixture:
   `z=1.788139e-07`, `next_z=1.788139e-07`, `actor_mean=1.024455e-07`,
   `cost=0`, cost argmin stable.
@@ -338,12 +301,6 @@ Synthetic latency baselines are available through `runtime-bench`:
 
 ```bash
 cargo run --release --bin runtime-bench -- \
-  --model le-wm \
-  --device cpu \
-  --warmup 5 \
-  --iters 20
-
-cargo run --release --features cuda --bin runtime-bench -- \
   --model td-mpc2 \
   --device cuda:0 \
   --samples 64 \
@@ -353,8 +310,8 @@ cargo run --release --features cuda --bin runtime-bench -- \
 ```
 
 The benchmark synchronizes the selected Candle device around timed sections, so
-CUDA and Metal timings include queued device work rather than just launch
-overhead. Current sections cover synthetic encode, dynamics where applicable,
+CUDA timings include queued device work rather than just launch overhead.
+Current sections cover synthetic encode, dynamics where applicable,
 rollout or scoring, an end-to-end synthetic path, and TD-MPC2 planner latency
 for CEM, MPPI, and iCEM. Planner sections reuse a reset `TdMpc2Session`, so they
 measure the hot MPC loop after observation encoding has been cached.
@@ -416,8 +373,8 @@ configured action and iCEM first tries its previous warm-start sequence.
 warm-start, or configured-action deadline handling. Planner configs also accept
 a `seed`; when set, candidate noise is
 generated by a deterministic host RNG and then moved to the selected Candle
-device, which makes planner sampling replayable across CPU/CUDA validation
-runs. Leave `seed` unset for backend-native random sampling in deployment.
+device, which makes planner sampling replayable in CUDA validation runs. Leave
+`seed` unset for backend-native random sampling in deployment.
 
 Latest local planner deadline and seeded-sampling validation, run on
 2026-05-29:

@@ -1,8 +1,3 @@
-#[cfg(feature = "accelerate")]
-extern crate accelerate_src;
-#[cfg(feature = "mkl")]
-extern crate intel_mkl_src;
-
 use std::{
     process::Command,
     time::{Duration, Instant},
@@ -33,7 +28,7 @@ struct Args {
     #[arg(long, value_enum, default_value_t = ModelArg::LeWm)]
     model: ModelArg,
 
-    #[arg(long, default_value_t = DeviceSpec::Cpu)]
+    #[arg(long, default_value_t = DeviceSpec::Cuda(0))]
     device: DeviceSpec,
 
     #[arg(long, default_value_t = DTypeSpec::F32)]

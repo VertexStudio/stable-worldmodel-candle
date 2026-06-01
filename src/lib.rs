@@ -3,11 +3,11 @@
 pub mod artifact;
 pub mod checkpoint;
 pub mod config;
-#[cfg(feature = "cuda")]
-pub mod cuda_media;
 pub mod ffi;
 #[cfg(feature = "hub")]
 pub mod hub;
+#[cfg(feature = "cuda")]
+pub mod media;
 pub mod models;
 pub mod planner;
 pub mod preprocess;

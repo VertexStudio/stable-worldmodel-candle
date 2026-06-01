@@ -14,7 +14,7 @@ use nvjpeg_sys::{
 };
 
 use super::{
-    CudaImageHistoryPreprocessor, CudaImagePreprocess, CudaImagePreprocessor, PackedImageFormat,
+    ImageHistoryPreprocessor, ImagePreprocess, ImagePreprocessor, PackedImageFormat,
     PackedImageShape, contiguous_slice_mut, require_contiguous,
 };
 
@@ -157,10 +157,10 @@ impl NvJpegDecoder {
     pub fn decode_preprocessed_nchw(
         &mut self,
         encoded: &[u8],
-        config: CudaImagePreprocess,
+        config: ImagePreprocess,
     ) -> Result<Tensor> {
         let decoded = self.decode_rgb_interleaved(encoded)?;
-        let mut preprocessor = CudaImagePreprocessor::new(&self.device, decoded.shape, config)?;
+        let mut preprocessor = ImagePreprocessor::new(&self.device, decoded.shape, config)?;
         preprocessor
             .preprocess_packed_u8(&decoded.tensor)?
             .contiguous()
@@ -170,7 +170,7 @@ impl NvJpegDecoder {
         &mut self,
         encoded: &[u8],
         rgb_output: &Tensor,
-        preprocessor: &'a mut CudaImagePreprocessor,
+        preprocessor: &'a mut ImagePreprocessor,
     ) -> Result<&'a Tensor> {
         let info = self.image_info(encoded)?;
         require_preprocessor_shape(info, preprocessor.input_shape())?;
@@ -183,7 +183,7 @@ impl NvJpegDecoder {
         encoded: &[u8],
         rgb_output: &Tensor,
         history_slot: usize,
-        preprocessor: &'a mut CudaImageHistoryPreprocessor,
+        preprocessor: &'a mut ImageHistoryPreprocessor,
     ) -> Result<&'a Tensor> {
         let info = self.image_info(encoded)?;
         require_preprocessor_shape(info, preprocessor.input_shape())?;
@@ -377,13 +377,13 @@ mod tests {
         );
         assert_eq!(decoded.tensor.dims(), &[1, 1, 1, 3]);
 
-        let config = CudaImagePreprocess {
+        let config = ImagePreprocess {
             output_height: 1,
             output_width: 1,
             mean: [0.0, 0.0, 0.0],
             std: [1.0, 1.0, 1.0],
         };
-        let mut preprocessor = CudaImagePreprocessor::new(&device, decoded.shape, config)?;
+        let mut preprocessor = ImagePreprocessor::new(&device, decoded.shape, config)?;
         let output = preprocessor.preprocess_packed_u8(&decoded.tensor)?;
         assert_eq!(output.dims(), &[1, 3, 1, 1]);
         Ok(())
