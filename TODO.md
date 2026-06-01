@@ -367,9 +367,6 @@ Expose the stable runtime without forcing a Python service.
 
 - `cargo check --locked --all-targets`
 - `cargo test --locked`
-- `cargo check --locked --features cuda --all-targets`
-- `cargo test --locked --features cuda`
-- `cargo check --locked --features cudnn --all-targets` when cuDNN is installed
 - `tools/cuda_parity.sh` when parity behavior changes
 
 Each chunk should add narrower tests for the behavior it implements.

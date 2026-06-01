@@ -118,5 +118,7 @@ fn cuda_device(index: usize) -> Result<Device> {
 
 #[cfg(not(feature = "cuda"))]
 fn cuda_device(_index: usize) -> Result<Device> {
-    candle::bail!("CUDA device requested, but this crate was built without --features cuda")
+    candle::bail!(
+        "CUDA device requested, but this crate was built without the CUDA/cuDNN feature stack"
+    )
 }

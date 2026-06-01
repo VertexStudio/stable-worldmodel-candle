@@ -3,8 +3,8 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("stable-worldmodel-candle is Linux/NVIDIA CUDA only.");
 
-#[cfg(not(feature = "cuda"))]
-compile_error!("stable-worldmodel-candle requires the cuda feature.");
+#[cfg(not(feature = "cudnn"))]
+compile_error!("stable-worldmodel-candle requires the CUDA/cuDNN feature stack.");
 
 pub mod artifact;
 pub mod checkpoint;

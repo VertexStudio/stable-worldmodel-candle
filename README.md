@@ -1,21 +1,62 @@
 # stable-worldmodel-candle
 
-Rust/Candle inference runtime for `stable-worldmodel` checkpoints.
+CUDA-first Rust/Candle deployment runtime for `stable-worldmodel` checkpoints.
 
 ![stable-worldmodel Candle runtime overview](docs/stable-worldmodel-runtime.png)
 
-Model implementations live under `src/models/`. Shared checkpoint and config
-helpers live at the crate root, and CLIs select a backend explicitly.
+The goal is to keep the runtime control loop in one Rust/NVIDIA path:
+load checkpoint, ingest media, preprocess on CUDA, encode observations, evaluate
+world-model rollouts, score candidate actions, and return the selected action
+through Rust or C ABI entrypoints.
+
+## Runtime Mandate
+
+This repo is not a portability layer. It is an NVIDIA deployment runtime, and
+fast optimized inference is the primary outcome. CPU, macOS, Metal, and generic
+host-first compatibility are intentionally out of scope.
+Performance is not a preference here; it is the acceptance criterion. If a
+runtime feature cannot stay on the NVIDIA/Candle CUDA path during inference, it
+is incomplete.
+
+Implementation choices should prefer the most direct NVIDIA path available:
+CUDA kernels, cuDNN, nvJPEG, NPP, NVDEC/NVENC where they apply, and Candle CUDA
+tensors as the shared runtime representation. Keep media buffers, preprocessed
+observations, latent states, candidate action batches, rollout costs, and
+selected actions device-resident through the hot path. Any avoidable Python
+loop, host tensor copy, synchronization point, or generic image/video decoder in
+the control loop should be treated as runtime debt.
+
+When Candle does not expose the NVIDIA primitive we need, the expected direction
+is to add a focused Candle CUDA op, bind the NVIDIA library directly, or use a
+CUDA-compatible crate that preserves device residency. Broad-platform
+compatibility is not a reason to keep slower runtime paths in this crate.
 
 ## Current Scope
 
-- Top-level modules: `checkpoint`, `config`, and `models`.
-- `models::lewm`: ViT-Tiny encoder, projector, action encoder, conditional predictor, latent rollout, and goal MSE cost.
-- `models::tdmpc2`: state/vector and pixel observation encoders, latent dynamics, reward/Q heads, actor mean action, and candidate cost scoring.
-- Loading from PyTorch `.pt` state dicts via `VarBuilder::from_pth`, or from `.safetensors`.
-- Optional Hugging Face Hub checkpoint download support behind `--features hub`.
-- Rust 2024 edition with published Candle crates.
-- CUDA shape smoke-test CLIs:
+- Linux/NVIDIA CUDA with cuDNN is the required runtime target. cuDNN is part of
+  the default feature stack, and non-CUDA/non-cuDNN/non-Linux builds are
+  rejected at compile time.
+- LeWM runtime: ViT-Tiny image encoder, projection stack, action encoder,
+  conditional predictor, latent rollout, goal embedding, goal cost, session
+  caching, and Rust-native goal planning.
+- TD-MPC2 runtime: state/vector, pixel, and mixed pixel+state observation
+  encoders; latent dynamics; reward/Q heads; actor mean action; candidate
+  scoring; session caching; and Rust-native MPC planning.
+- NVIDIA media path: nvJPEG decode into Candle CUDA tensors, packed
+  RGB/BGR/RGBA/BGRA CUDA frame preprocessing, NV12 CUDA surface preprocessing,
+  fused resize/reorder/colorspace/normalization kernels, and history-slot writes
+  for image/video control loops.
+- Planning solvers: CEM, MPPI, and iCEM generate candidates, score world-model
+  rollouts, select/update action sequences, and keep the hot planning path on
+  Candle CUDA tensors.
+- Deployment interfaces: Rust API, C ABI, explicit deployment artifact schema,
+  `.safetensors` and PyTorch `.pt` state-dict loading, and optional Hugging Face
+  Hub checkpoint download behind `--features hub`.
+- Validation tooling: repo-local `uv` environment using the official
+  `stable-worldmodel[train]` package, deterministic CUDA fixture exporters,
+  LeWM and TD-MPC2 parity comparators, cost argmin checks, and runtime
+  benchmarks.
+- CUDA smoke-test CLIs:
 
 ```bash
 cargo run --bin lewm-inspect -- --action-dim 2
@@ -164,8 +205,8 @@ SimNorm.
 
 ## NVIDIA Media Runtime
 
-CUDA builds expose `media` for NVIDIA media ingestion. With the `nvjpeg`
-feature enabled, JPEG bytes are decoded by NVIDIA nvJPEG directly into a
+Required CUDA/cuDNN builds expose `media` for NVIDIA media ingestion. With the
+`nvjpeg` feature enabled, JPEG bytes are decoded by NVIDIA nvJPEG directly into a
 Candle CUDA `U8` tensor on Candle's CUDA stream, then the fused CUDA
 preprocessor produces model-ready tensors:
 
@@ -205,13 +246,13 @@ pipelines.
 Build and validate the NVIDIA JPEG path:
 
 ```bash
-cargo test --features cuda media -- --nocapture
+cargo test media -- --nocapture
 cargo check --features nvjpeg --all-targets
 cargo test --features nvjpeg media -- --nocapture
 ```
 
 Set `CUDA_HOME` or `CUDA_PATH` when CUDA is installed outside the standard
-`/usr/local/cuda*` locations so Cargo can find `libnvjpeg.so`.
+`/usr/local/cuda*` locations so Cargo can find the NVIDIA libraries.
 
 For backend parity, generate a Python CUDA fixture, then compare Candle CUDA
 against it:
@@ -235,10 +276,13 @@ benchmarking, runs with gradients off, and exports model outputs after
 
 ## NVIDIA Build
 
-Linux with NVIDIA CUDA is required. The crate rejects non-Linux targets and
-builds without the `cuda` feature at compile time.
+Linux with NVIDIA CUDA and cuDNN is required. The crate rejects non-Linux
+targets and builds without the CUDA/cuDNN feature stack at compile time.
+Install the NVIDIA libraries needed by the runtime path you are validating:
+CUDA Toolkit, cuDNN, and for encoded media ingestion, nvJPEG/NPP/NVDEC-facing
+development packages as those paths land.
 
-CUDA is the default runtime:
+CUDA/cuDNN is the default runtime:
 
 ```bash
 cargo check --all-targets
@@ -253,23 +297,17 @@ cargo run --release --bin lewm-inspect -- \
   --action-dim 2
 ```
 
-cuDNN is available as an additive feature:
-
-```bash
-cargo check --features cudnn --all-targets
-```
-
 Full LeWM CUDA parity matrix:
 
 ```bash
 tools/cuda_parity.sh
 ```
 
-The matrix runs environment sanity checks, Rust CUDA build/tests, cuDNN checks
-when detected, Python CUDA fixture export, and Candle CUDA vs Python CUDA. Set
-`MODEL`, `CUDA_FIXTURE`, `PYTHON_VERSION`, `RUN_CUDNN`, or `CARGO_LOCKED=0`
-to override defaults. Set `STABLE_WORLDMODEL_ROOT` only when
-testing a local Python source tree instead of the locked package.
+The matrix runs environment sanity checks, Rust CUDA/cuDNN build/tests, Python
+CUDA fixture export, and Candle CUDA vs Python CUDA. Set `MODEL`,
+`CUDA_FIXTURE`, `PYTHON_VERSION`, or `CARGO_LOCKED=0` to override defaults. Set
+`STABLE_WORLDMODEL_ROOT` only when testing a local Python source tree instead of
+the locked package.
 
 Default parity tolerances are per-output: `act_emb=1e-5`, `emb=1e-3`,
 `pred=1e-3`, `rollout=2e-3`, and `cost=1e-2`. The Python and Rust comparators
@@ -281,9 +319,7 @@ Latest local CUDA parity result, run on 2026-05-29:
   `13.0`, `nvcc 13.0.88`.
 - Python fixture env: PyTorch `2.10.0+cu128`, `torch.cuda.is_available() ==
   True`, `torch.version.cuda == 12.8`.
-- Rust checks: `cargo check --locked --features cuda --all-targets`,
-  `cargo test --locked --features cuda`, and
-  `cargo check --locked --features cudnn --all-targets` all passed.
+- Rust CUDA/cuDNN build and test checks passed.
 
 | Comparison | `emb` max abs | `act_emb` max abs | `pred` max abs | `rollout` max abs | `cost` max abs | Cost argmin |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
@@ -323,10 +359,9 @@ Latest local planner validation after device-side CEM/iCEM elite selection,
 run on 2026-05-29:
 
 - `cargo test --locked` passed.
-- `cargo check --locked --features cuda --all-targets` passed.
-- `cargo test --locked --features cuda` passed.
+- `cargo check --locked --all-targets` passed.
 - CUDA smoke completed with
-  `cargo run --locked --features cuda --bin runtime-bench -- --model td-mpc2 --device cuda --warmup 0 --iters 1 --samples 4 --horizon 2 --planner-iterations 1`.
+  `cargo run --locked --bin runtime-bench -- --model td-mpc2 --device cuda --warmup 0 --iters 1 --samples 4 --horizon 2 --planner-iterations 1`.
   This debug smoke emitted `plan_cem`, `plan_mppi`, and `plan_icem` sections;
   use the release benchmark commands above for latency baselines.
 
@@ -383,7 +418,6 @@ Latest local planner deadline and seeded-sampling validation, run on
 2026-05-29:
 
 - `cargo test --locked` passed.
-- `cargo test --locked --features cuda` passed.
 - Deadline tests cover CEM/MPPI configured actions and iCEM warm-start behavior
   without requiring the scorer/session to be reset; seeded CEM tests verify
   deterministic replay of candidate sampling.
@@ -394,7 +428,6 @@ The crate also builds a `cdylib` for C callers:
 
 ```bash
 cargo build --release
-cargo build --release --features cudnn
 ```
 
 The initial ABI matches the parity-covered TD-MPC2 runtime paths for state,
@@ -443,7 +476,6 @@ Latest local C ABI validation after adding TD-MPC2 pixel/iCEM and LeWM
 entrypoints, run on 2026-05-29:
 
 - `cargo test --locked` passed.
-- `cargo test --locked --features cuda` passed.
 - `cargo build --locked --release --lib` produced the release library.
 
 ## Source Layout

@@ -6,7 +6,6 @@ SWM_ROOT="${STABLE_WORLDMODEL_ROOT:-}"
 MODEL="${MODEL:-quentinll/lewm-pusht}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
 CUDA_FIXTURE="${CUDA_FIXTURE:-"$ROOT/target/lewm-pusht-python-cuda.npz"}"
-RUN_CUDNN="${RUN_CUDNN:-auto}"
 CARGO_LOCKED="${CARGO_LOCKED:-1}"
 
 section() {
@@ -37,17 +36,6 @@ run_python() {
   )
 }
 
-cudnn_available() {
-  if [[ -n "${CUDNN_LIB_DIR:-}" || -n "${CUDNN_INCLUDE_DIR:-}" ]]; then
-    return 0
-  fi
-  if command -v ldconfig >/dev/null 2>&1; then
-    ldconfig -p 2>/dev/null | grep -q 'libcudnn'
-    return
-  fi
-  return 1
-}
-
 section "Environment sanity"
 nvidia-smi
 nvcc --version || true
@@ -63,34 +51,12 @@ print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "no cuda")
 PY
 )
 
-section "Rust CUDA build"
+section "Rust CUDA/cuDNN build"
 (
   cd "$ROOT"
-  cargo check "${cargo_locked_args[@]}" --features cuda --all-targets
-  cargo test "${cargo_locked_args[@]}" --features cuda
+  cargo check "${cargo_locked_args[@]}" --all-targets
+  cargo test "${cargo_locked_args[@]}"
 )
-
-case "$RUN_CUDNN" in
-  1|true|yes)
-    section "Rust cuDNN build"
-    (cd "$ROOT" && cargo check "${cargo_locked_args[@]}" --features cudnn --all-targets)
-    ;;
-  auto)
-    if cudnn_available; then
-      section "Rust cuDNN build"
-      (cd "$ROOT" && cargo check "${cargo_locked_args[@]}" --features cudnn --all-targets)
-    else
-      echo "Skipping cuDNN build check; set RUN_CUDNN=1 to force it."
-    fi
-    ;;
-  0|false|no)
-    echo "Skipping cuDNN build check."
-    ;;
-  *)
-    echo "unsupported RUN_CUDNN=$RUN_CUDNN" >&2
-    exit 1
-    ;;
-esac
 
 section "Python LeWM CUDA fixture"
 run_python "$ROOT/tools/export_lewm_fixture.py" \
@@ -102,7 +68,7 @@ run_python "$ROOT/tools/export_lewm_fixture.py" \
 section "Candle CUDA vs Python CUDA"
 (
   cd "$ROOT"
-  cargo run --release "${cargo_locked_args[@]}" --features 'cuda hub' \
+  cargo run --release "${cargo_locked_args[@]}" --features hub \
     --bin lewm-compare-fixture -- \
     --device cuda \
     --fixture "$CUDA_FIXTURE" \

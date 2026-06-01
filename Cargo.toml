@@ -21,11 +21,11 @@ rand = "0.9.4"
 rand_distr = "0.5.1"
 
 [features]
-default = ["cuda"]
+default = ["cudnn"]
 hub = ["dep:hf-hub"]
 cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 cudnn = ["cuda", "candle/cudnn", "candle-nn/cudnn", "candle-transformers/cudnn"]
-nvjpeg = ["cuda", "dep:nvjpeg-sys"]
+nvjpeg = ["cudnn", "dep:nvjpeg-sys"]
 
 [lib]
 name = "stable_worldmodel_candle"
