@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SWM_ROOT="${STABLE_WORLDMODEL_ROOT:-}"
 MODEL="${MODEL:-quentinll/lewm-pusht}"
-PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
 CUDA_FIXTURE="${CUDA_FIXTURE:-"$ROOT/target/lewm-pusht-python-cuda.npz"}"
 CARGO_LOCKED="${CARGO_LOCKED:-1}"
 
@@ -20,7 +19,6 @@ fi
 uv_args=(
   uv run
   --project "$ROOT"
-  --python "$PYTHON_VERSION"
   --no-dev
 )
 

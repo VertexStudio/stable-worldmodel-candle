@@ -84,15 +84,17 @@ Official LeWM mirrors currently use this layout, for example
 `quentinll/lewm-pusht`, `quentinll/lewm-reacher`, and
 `quentinll/lewm-tworooms`.
 
-This repo includes a `pyproject.toml` and `uv.lock` for parity tooling. The
-Python environment depends on the official `stable-worldmodel[train]` package
-and pins `transformers<5` for the current public LeWM checkpoints, whose
-weights use the Hugging Face ViT 4.x key layout (`encoder.encoder.layer.*`).
+This repo includes `.python-version`, `pyproject.toml`, and `uv.lock` for parity
+tooling. `.python-version` selects Python 3.12 for `uv`; `pyproject.toml`
+declares the allowed Python range and dependencies. The Python environment
+depends on the official `stable-worldmodel[train]` package and pins
+`transformers<5` for the current public LeWM checkpoints, whose weights use the
+Hugging Face ViT 4.x key layout (`encoder.encoder.layer.*`).
 
 To export a deterministic Python fixture from the official implementation:
 
 ```bash
-uv run --python 3.12 --no-dev \
+uv run --no-dev \
   python tools/export_lewm_fixture.py \
   --model quentinll/lewm-pusht \
   --device cuda \
@@ -128,7 +130,7 @@ TD-MPC2 state/vector fixture export uses a deterministic Python model and saves
 both an `.npz` fixture and a `.pt` state dict:
 
 ```bash
-uv run --python 3.12 --no-dev \
+uv run --no-dev \
   python tools/export_tdmpc2_fixture.py \
   --device cuda \
   --output target/tdmpc2-state-python-cuda.npz \
@@ -144,7 +146,7 @@ The same exporter and comparator cover pixel-only and mixed pixel+state
 fixtures:
 
 ```bash
-uv run --python 3.12 --no-dev \
+uv run --no-dev \
   python tools/export_tdmpc2_fixture.py \
   --fixture-kind pixel \
   --device cuda \
@@ -164,7 +166,7 @@ encoding.
 Self-contained Python tooling validation, run on 2026-06-01:
 
 - `uv lock --locked` passed with `stable-worldmodel[train]` from PyPI.
-- `uv run --locked --python 3.12 --no-dev python ...` imported
+- `uv run --locked --no-dev python ...` imported
   `stable_worldmodel` from this repo's `.venv`.
 - `tools/export_tdmpc2_fixture.py` generated a CUDA state fixture using only this
   repo's locked Python environment.
@@ -258,7 +260,7 @@ For backend parity, generate a Python CUDA fixture, then compare Candle CUDA
 against it:
 
 ```bash
-uv run --python 3.12 --no-dev \
+uv run --no-dev \
   python tools/export_lewm_fixture.py \
   --model quentinll/lewm-pusht \
   --device cuda \
@@ -305,7 +307,7 @@ tools/cuda_parity.sh
 
 The matrix runs environment sanity checks, Rust CUDA/cuDNN build/tests, Python
 CUDA fixture export, and Candle CUDA vs Python CUDA. Set `MODEL`,
-`CUDA_FIXTURE`, `PYTHON_VERSION`, or `CARGO_LOCKED=0` to override defaults. Set
+`CUDA_FIXTURE` or `CARGO_LOCKED=0` to override defaults. Set
 `STABLE_WORLDMODEL_ROOT` only when testing a local Python source tree instead of
 the locked package.
 
