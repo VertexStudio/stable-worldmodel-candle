@@ -225,6 +225,65 @@ fn cem_seed_replays_same_candidate_sequence() -> anyhow::Result<()> {
 }
 
 #[test]
+fn mppi_seed_replays_same_candidate_sequence() -> anyhow::Result<()> {
+    let device = Device::new_cuda(0)?;
+    let dtype = DType::F32;
+    let state_dim = 12;
+    let action_dim = 4;
+    let model = TdMpc2::new(
+        TdMpc2Config::state_only(state_dim, action_dim),
+        empty_vb(dtype, &device),
+    )?;
+    let mut session = TdMpc2Session::new(model, device.clone(), dtype);
+    let state = Tensor::randn(0f32, 1f32, (2, state_dim), &device)?;
+    session.reset_state(&state)?;
+
+    let mut mppi_cfg = MppiConfig::new(3, 8, action_dim);
+    mppi_cfg.iterations = 2;
+    mppi_cfg.seed = Some(42);
+
+    let first = MppiPlanner::new(mppi_cfg.clone()).plan(&session)?;
+    let second = MppiPlanner::new(mppi_cfg).plan(&session)?;
+
+    assert_eq!(
+        first.sequence.to_vec3::<f32>()?,
+        second.sequence.to_vec3::<f32>()?
+    );
+    assert_eq!(first.best_indices, second.best_indices);
+    Ok(())
+}
+
+#[test]
+fn icem_seed_replays_same_candidate_sequence() -> anyhow::Result<()> {
+    let device = Device::new_cuda(0)?;
+    let dtype = DType::F32;
+    let state_dim = 12;
+    let action_dim = 4;
+    let model = TdMpc2::new(
+        TdMpc2Config::state_only(state_dim, action_dim),
+        empty_vb(dtype, &device),
+    )?;
+    let mut session = TdMpc2Session::new(model, device.clone(), dtype);
+    let state = Tensor::randn(0f32, 1f32, (2, state_dim), &device)?;
+    session.reset_state(&state)?;
+
+    let mut icem_cfg = IcemConfig::new(3, 8, 3, action_dim);
+    icem_cfg.iterations = 2;
+    icem_cfg.keep_elites = 2;
+    icem_cfg.seed = Some(42);
+
+    let first = IcemPlanner::new(icem_cfg.clone()).plan(&session)?;
+    let second = IcemPlanner::new(icem_cfg).plan(&session)?;
+
+    assert_eq!(
+        first.sequence.to_vec3::<f32>()?,
+        second.sequence.to_vec3::<f32>()?
+    );
+    assert_eq!(first.best_indices, second.best_indices);
+    Ok(())
+}
+
+#[test]
 fn mppi_returns_configured_fallback_when_deadline_prevents_iteration() -> anyhow::Result<()> {
     let device = Device::new_cuda(0)?;
     let dtype = DType::F32;

@@ -2,8 +2,6 @@ use std::time::{Duration, Instant};
 
 use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::ops;
-use rand::{SeedableRng, rngs::StdRng};
-use rand_distr::{Distribution, StandardNormal};
 
 use crate::session::{LeWmSession, TdMpc2Session};
 
@@ -359,6 +357,7 @@ impl CemPlanner {
         let dtype = scorer.dtype();
         let cfg = &self.config;
         let batch = scorer.batch_size().unwrap_or(1);
+        seed_device_if_requested(device, cfg.seed)?;
 
         let mut mean = Tensor::zeros((batch, cfg.horizon, cfg.action_dim), dtype, device)?;
         let mut std = Tensor::ones((batch, cfg.horizon, cfg.action_dim), dtype, device)?
@@ -367,7 +366,6 @@ impl CemPlanner {
         let mut last_scores = None;
         let mut iterations_completed = 0;
         let mut deadline_reached = false;
-        let mut rng = cfg.seed.map(StdRng::seed_from_u64);
 
         for iter_idx in 0..cfg.iterations {
             if deadline_elapsed(start, cfg.deadline) {
@@ -387,15 +385,8 @@ impl CemPlanner {
                 break;
             }
 
-            let candidates = sample_candidates(
-                &mean,
-                &std,
-                cfg.samples,
-                &cfg.action_bounds,
-                dtype,
-                device,
-                rng.as_mut(),
-            )?;
+            let candidates =
+                sample_candidates(&mean, &std, cfg.samples, &cfg.action_bounds, dtype, device)?;
             let scores = scorer.score_candidates(&candidates)?;
             validate_scores_shape(&scores, batch, cfg.samples)?;
             let elites = select_elites(&candidates, &scores, cfg.elites)?;
@@ -453,6 +444,7 @@ impl MppiPlanner {
         let dtype = scorer.dtype();
         let cfg = &self.config;
         let batch = scorer.batch_size().unwrap_or(1);
+        seed_device_if_requested(device, cfg.seed)?;
 
         let mut mean = Tensor::zeros((batch, cfg.horizon, cfg.action_dim), dtype, device)?;
         let std = Tensor::ones((batch, cfg.horizon, cfg.action_dim), dtype, device)?
@@ -460,7 +452,6 @@ impl MppiPlanner {
         let mut last_scores = None;
         let mut iterations_completed = 0;
         let mut deadline_reached = false;
-        let mut rng = cfg.seed.map(StdRng::seed_from_u64);
 
         for iter_idx in 0..cfg.iterations {
             if deadline_elapsed(start, cfg.deadline) {
@@ -480,15 +471,8 @@ impl MppiPlanner {
                 break;
             }
 
-            let candidates = sample_candidates(
-                &mean,
-                &std,
-                cfg.samples,
-                &cfg.action_bounds,
-                dtype,
-                device,
-                rng.as_mut(),
-            )?;
+            let candidates =
+                sample_candidates(&mean, &std, cfg.samples, &cfg.action_bounds, dtype, device)?;
             let scores = scorer.score_candidates(&candidates)?;
             validate_scores_shape(&scores, batch, cfg.samples)?;
             mean = mppi_weighted_sequence(&candidates, &scores, cfg.temperature)?;
@@ -557,6 +541,7 @@ impl IcemPlanner {
         let dtype = scorer.dtype();
         let cfg = &self.config;
         let batch = scorer.batch_size().unwrap_or(1);
+        seed_device_if_requested(device, cfg.seed)?;
 
         let mut mean = self.initial_mean(batch, dtype, device)?;
         let mut std = Tensor::ones((batch, cfg.horizon, cfg.action_dim), dtype, device)?
@@ -566,7 +551,6 @@ impl IcemPlanner {
         let mut last_scores = None;
         let mut iterations_completed = 0;
         let mut deadline_reached = false;
-        let mut rng = cfg.seed.map(StdRng::seed_from_u64);
 
         for iter_idx in 0..cfg.iterations {
             if deadline_elapsed(start, cfg.deadline) {
@@ -595,15 +579,8 @@ impl IcemPlanner {
                 break;
             }
 
-            let sampled = sample_candidates(
-                &mean,
-                &std,
-                cfg.samples,
-                &cfg.action_bounds,
-                dtype,
-                device,
-                rng.as_mut(),
-            )?;
+            let sampled =
+                sample_candidates(&mean, &std, cfg.samples, &cfg.action_bounds, dtype, device)?;
             let candidates = match carried_elites.as_ref() {
                 Some(elites) => Tensor::cat(&[&sampled, elites], 1)?,
                 None => sampled,
@@ -785,6 +762,13 @@ fn fallback_plan_result(
     })
 }
 
+fn seed_device_if_requested(device: &Device, seed: Option<u64>) -> Result<()> {
+    if let Some(seed) = seed {
+        device.set_seed(seed)?;
+    }
+    Ok(())
+}
+
 fn sample_candidates(
     mean: &Tensor,
     std: &Tensor,
@@ -792,12 +776,11 @@ fn sample_candidates(
     bounds: &ActionBounds,
     dtype: DType,
     device: &Device,
-    rng: Option<&mut StdRng>,
 ) -> Result<Tensor> {
     let batch = mean.dim(0)?;
     let (_, horizon, action_dim) = mean.dims3()?;
     let shape = (batch, samples, horizon, action_dim);
-    let noise = sample_standard_normal(shape, dtype, device, rng)?;
+    let noise = sample_standard_normal(shape, dtype, device)?;
     let mean = mean.unsqueeze(1)?.broadcast_as(shape)?;
     let std = std.unsqueeze(1)?.broadcast_as(shape)?;
     let candidates = mean.broadcast_add(&noise.broadcast_mul(&std)?)?;
@@ -808,20 +791,8 @@ fn sample_standard_normal(
     shape: (usize, usize, usize, usize),
     dtype: DType,
     device: &Device,
-    rng: Option<&mut StdRng>,
 ) -> Result<Tensor> {
-    match rng {
-        Some(rng) => {
-            let elem_count = shape.0 * shape.1 * shape.2 * shape.3;
-            let mut values = Vec::with_capacity(elem_count);
-            for _ in 0..elem_count {
-                let value: f32 = StandardNormal.sample(rng);
-                values.push(value);
-            }
-            Tensor::from_vec(values, shape, device)?.to_dtype(dtype)
-        }
-        None => Tensor::randn(0f32, 1f32, shape, device)?.to_dtype(dtype),
-    }
+    Tensor::randn(0f32, 1f32, shape, device)?.to_dtype(dtype)
 }
 
 fn mppi_weighted_sequence(
