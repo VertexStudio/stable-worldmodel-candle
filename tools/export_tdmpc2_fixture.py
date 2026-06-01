@@ -108,11 +108,11 @@ def main() -> None:
     model = model.to(device)
 
     with torch.no_grad():
-        obs_cpu = {}
+        obs_host = {}
         obs_device = {}
         if args.fixture_kind in ("state", "both"):
             state = torch.randn(args.batch_size, args.state_dim, dtype=torch.float32)
-            obs_cpu["state"] = state
+            obs_host["state"] = state
             obs_device["state"] = state.to(device)
         if args.fixture_kind in ("pixel", "both"):
             pixels = torch.randn(
@@ -122,7 +122,7 @@ def main() -> None:
                 args.image_size,
                 dtype=torch.float32,
             )
-            obs_cpu["pixels"] = pixels
+            obs_host["pixels"] = pixels
             obs_device["pixels"] = pixels.to(device)
 
         action = torch.randn(args.batch_size, args.action_dim, dtype=torch.float32).clamp(
@@ -154,7 +154,7 @@ def main() -> None:
         actor_mean=tensor_to_numpy(actor_mean),
         cost=tensor_to_numpy(cost),
     )
-    for name, tensor in obs_cpu.items():
+    for name, tensor in obs_host.items():
         arrays[name] = tensor_to_numpy(tensor)
     np.savez(args.output, **arrays)
 

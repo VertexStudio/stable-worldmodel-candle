@@ -4,6 +4,10 @@ use stable_worldmodel_candle::preprocess::{
     preprocess_rgb_frames_u8, preprocess_states,
 };
 
+fn device() -> Device {
+    Device::new_cuda(0).unwrap()
+}
+
 #[test]
 fn preprocesses_rgb_frames_to_batched_ncthw_tensor() {
     let frames = [255u8, 0, 127];
@@ -22,7 +26,7 @@ fn preprocesses_rgb_frames_to_batched_ncthw_tensor() {
         },
         cfg,
         DType::F32,
-        &Device::Cpu,
+        &device(),
     )
     .unwrap();
 
@@ -54,7 +58,7 @@ fn resizes_rgb_frames_with_nearest_neighbor() {
         },
         cfg,
         DType::F32,
-        &Device::Cpu,
+        &device(),
     )
     .unwrap();
 
@@ -82,7 +86,7 @@ fn extracts_latest_rgb_frame_for_pixel_models() {
         },
         cfg,
         DType::F32,
-        &Device::Cpu,
+        &device(),
     )
     .unwrap();
 
@@ -100,7 +104,7 @@ fn preprocesses_states_with_optional_normalization() {
         Some(&[1.0, 2.0]),
         Some(&[1.0, 2.0]),
         DType::F32,
-        &Device::Cpu,
+        &device(),
     )
     .unwrap();
 
@@ -113,16 +117,8 @@ fn preprocesses_states_with_optional_normalization() {
 
 #[test]
 fn rejects_state_normalization_with_wrong_dim() {
-    let err = preprocess_states(
-        &[1.0, 2.0],
-        1,
-        2,
-        Some(&[0.0]),
-        None,
-        DType::F32,
-        &Device::Cpu,
-    )
-    .unwrap_err();
+    let err = preprocess_states(&[1.0, 2.0], 1, 2, Some(&[0.0]), None, DType::F32, &device())
+        .unwrap_err();
 
     assert!(err.to_string().contains("state mean length"));
 }
@@ -139,7 +135,7 @@ fn rejects_wrong_rgb_buffer_length() {
         },
         ImagePreprocess::imagenet_224(),
         DType::F32,
-        &Device::Cpu,
+        &device(),
     )
     .unwrap_err();
 
@@ -156,7 +152,7 @@ fn clamps_actions_to_bounds() {
         &[-1.0, 0.0],
         &[1.0, 2.0],
         DType::F32,
-        &Device::Cpu,
+        &device(),
     )
     .unwrap();
 
@@ -177,7 +173,7 @@ fn rejects_action_bounds_with_wrong_dim() {
         &[0.0],
         &[1.0, 1.0],
         DType::F32,
-        &Device::Cpu,
+        &device(),
     )
     .unwrap_err();
 

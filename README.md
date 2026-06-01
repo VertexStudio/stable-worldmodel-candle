@@ -15,7 +15,7 @@ helpers live at the crate root, and CLIs select a backend explicitly.
 - Loading from PyTorch `.pt` state dicts via `VarBuilder::from_pth`, or from `.safetensors`.
 - Optional Hugging Face Hub checkpoint download support behind `--features hub`.
 - Rust 2024 edition with published Candle crates.
-- Backend-specific shape smoke-test CLIs:
+- CUDA shape smoke-test CLIs:
 
 ```bash
 cargo run --bin lewm-inspect -- --action-dim 2
@@ -235,7 +235,10 @@ benchmarking, runs with gradients off, and exports model outputs after
 
 ## NVIDIA Build
 
-CUDA is the default backend:
+Linux with NVIDIA CUDA is required. The crate rejects non-Linux targets and
+builds without the `cuda` feature at compile time.
+
+CUDA is the default runtime:
 
 ```bash
 cargo check --all-targets
@@ -391,7 +394,7 @@ The crate also builds a `cdylib` for C callers:
 
 ```bash
 cargo build --release
-cargo build --release --features cuda
+cargo build --release --features cudnn
 ```
 
 The initial ABI matches the parity-covered TD-MPC2 runtime paths for state,
@@ -453,6 +456,7 @@ src/
 │   ├── mod.rs
 │   └── lewm/            # LeWM backend
 │   └── tdmpc2/          # state/vector TD-MPC2 backend
+├── media/               # NVIDIA media decode/preprocess path
 ├── ffi.rs               # C ABI entrypoints
 ├── planner.rs           # Rust planning solvers
 └── bin/

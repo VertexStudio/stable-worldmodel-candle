@@ -180,13 +180,13 @@ Make TD-MPC2 usable for both state/vector and pixel observation deployments.
 - TD-MPC2 pixel CNN support is implemented with the upstream conv layout and
   `pixel_encoder` projection.
 - Pixel-only and combined pixel+state encoding are covered by Rust tests.
-- Pixel-only fixture export/comparison passes on CPU and CUDA.
-- Mixed pixel+state fixture export/comparison passes on CPU and CUDA.
+- Pixel-only fixture export/comparison passes on CUDA.
+- Mixed pixel+state fixture export/comparison passes on CUDA.
 
 **Done When**
 
-- TD-MPC2 state/vector parity passes on CPU and CUDA.
-- TD-MPC2 pixel parity passes on CPU and CUDA.
+- TD-MPC2 state/vector parity passes on CUDA.
+- TD-MPC2 pixel parity passes on CUDA.
 - `get_cost` and actor behavior are covered by parity tests.
 - Pixel and state/vector encoders are both supported from deployment packages.
 

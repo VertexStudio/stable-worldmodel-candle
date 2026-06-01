@@ -944,7 +944,7 @@ mod tests {
 
     #[test]
     fn select_elites_uses_device_sort_and_gather_per_batch() -> Result<()> {
-        let device = Device::Cpu;
+        let device = Device::new_cuda(0)?;
         let candidates = Tensor::arange(0f32, 8f32, &device)?.reshape((2, 4, 1, 1))?;
         let scores = Tensor::new(&[[3f32, 1., 4., 0.5], [9., -1., 2., -2.]], &device)?;
 
@@ -965,7 +965,7 @@ mod tests {
 
     #[test]
     fn sorted_score_indices_rejects_non_finite_scores() -> Result<()> {
-        let device = Device::Cpu;
+        let device = Device::new_cuda(0)?;
         let scores = Tensor::new(&[[0f32, f32::INFINITY]], &device)?;
         let err = sorted_score_indices(&scores).unwrap_err();
 

@@ -14,7 +14,7 @@ use stable_worldmodel_candle::{
 
 #[test]
 fn cem_plans_tdmpc2_action_sequence() -> anyhow::Result<()> {
-    let device = Device::Cpu;
+    let device = Device::new_cuda(0)?;
     let dtype = DType::F32;
     let state_dim = 12;
     let action_dim = 4;
@@ -57,7 +57,7 @@ fn cem_plans_tdmpc2_action_sequence() -> anyhow::Result<()> {
 
 #[test]
 fn cem_propagates_scorer_reset_error() -> anyhow::Result<()> {
-    let device = Device::Cpu;
+    let device = Device::new_cuda(0)?;
     let dtype = DType::F32;
     let action_dim = 4;
     let cfg = TdMpc2Config::state_only(12, action_dim);
@@ -73,7 +73,7 @@ fn cem_propagates_scorer_reset_error() -> anyhow::Result<()> {
 
 #[test]
 fn mppi_plans_tdmpc2_action_sequence() -> anyhow::Result<()> {
-    let device = Device::Cpu;
+    let device = Device::new_cuda(0)?;
     let dtype = DType::F32;
     let state_dim = 12;
     let action_dim = 4;
@@ -119,7 +119,7 @@ fn mppi_plans_tdmpc2_action_sequence() -> anyhow::Result<()> {
 
 #[test]
 fn icem_keeps_shifted_warm_start_between_plans() -> anyhow::Result<()> {
-    let device = Device::Cpu;
+    let device = Device::new_cuda(0)?;
     let dtype = DType::F32;
     let state_dim = 12;
     let action_dim = 4;
@@ -169,7 +169,7 @@ fn icem_keeps_shifted_warm_start_between_plans() -> anyhow::Result<()> {
 
 #[test]
 fn cem_returns_configured_fallback_when_deadline_prevents_iteration() -> anyhow::Result<()> {
-    let device = Device::Cpu;
+    let device = Device::new_cuda(0)?;
     let dtype = DType::F32;
     let action_dim = 4;
     let model = TdMpc2::new(
@@ -197,7 +197,7 @@ fn cem_returns_configured_fallback_when_deadline_prevents_iteration() -> anyhow:
 
 #[test]
 fn cem_seed_replays_same_candidate_sequence() -> anyhow::Result<()> {
-    let device = Device::Cpu;
+    let device = Device::new_cuda(0)?;
     let dtype = DType::F32;
     let state_dim = 12;
     let action_dim = 4;
@@ -226,7 +226,7 @@ fn cem_seed_replays_same_candidate_sequence() -> anyhow::Result<()> {
 
 #[test]
 fn mppi_returns_configured_fallback_when_deadline_prevents_iteration() -> anyhow::Result<()> {
-    let device = Device::Cpu;
+    let device = Device::new_cuda(0)?;
     let dtype = DType::F32;
     let action_dim = 4;
     let model = TdMpc2::new(
@@ -254,7 +254,7 @@ fn mppi_returns_configured_fallback_when_deadline_prevents_iteration() -> anyhow
 
 #[test]
 fn icem_returns_warm_start_when_deadline_prevents_iteration() -> anyhow::Result<()> {
-    let device = Device::Cpu;
+    let device = Device::new_cuda(0)?;
     let dtype = DType::F32;
     let action_dim = 4;
     let model = TdMpc2::new(

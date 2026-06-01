@@ -8,7 +8,7 @@ use stable_worldmodel_candle::{
 
 #[test]
 fn tdmpc2_session_scores_candidates_after_reset() -> anyhow::Result<()> {
-    let device = Device::Cpu;
+    let device = Device::new_cuda(0)?;
     let dtype = DType::F32;
     let cfg = TdMpc2Config::state_only(12, 4);
     let model = TdMpc2::new(cfg, empty_vb(dtype, &device))?;
@@ -30,7 +30,7 @@ fn tdmpc2_session_scores_candidates_after_reset() -> anyhow::Result<()> {
 
 #[test]
 fn tdmpc2_session_requires_reset_before_scoring() -> anyhow::Result<()> {
-    let device = Device::Cpu;
+    let device = Device::new_cuda(0)?;
     let dtype = DType::F32;
     let cfg = TdMpc2Config::state_only(12, 4);
     let model = TdMpc2::new(cfg, empty_vb(dtype, &device))?;
@@ -45,7 +45,7 @@ fn tdmpc2_session_requires_reset_before_scoring() -> anyhow::Result<()> {
 
 #[test]
 fn tdmpc2_session_scores_pixel_candidates_after_reset() -> anyhow::Result<()> {
-    let device = Device::Cpu;
+    let device = Device::new_cuda(0)?;
     let dtype = DType::F32;
     let cfg = TdMpc2Config::pixel_only(64, 4, 128);
     let model = TdMpc2::new(cfg, empty_vb(dtype, &device))?;

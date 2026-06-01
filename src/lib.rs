@@ -1,5 +1,11 @@
 //! Candle inference components for stable-worldmodel.
 
+#[cfg(not(target_os = "linux"))]
+compile_error!("stable-worldmodel-candle is Linux/NVIDIA CUDA only.");
+
+#[cfg(not(feature = "cuda"))]
+compile_error!("stable-worldmodel-candle requires the cuda feature.");
+
 pub mod artifact;
 pub mod checkpoint;
 pub mod config;
