@@ -36,10 +36,10 @@ predictable and deployment practical.
 - TD-MPC2 pixel CNN inference exists for NCHW/NHWC image tensors with CPU/CUDA
   fixture parity for pixel-only and CPU fixture parity for mixed pixel+state.
 - Rust preprocessing exists for decoded RGB frame stacks, latest-frame pixel
-  tensors, normalized state arrays, and clamped action arrays; optional
-  file/video decode support is still pending.
-- CUDA media preprocessing now has a device-resident path for packed U8
-  RGB/BGR/RGBA/BGRA image tensors into normalized F32 NCHW Candle tensors.
+  tensors, normalized state arrays, and clamped action arrays.
+- CUDA media ingestion now decodes JPEG bytes through nvJPEG into Candle CUDA
+  U8 RGB tensors and preprocesses packed U8 RGB/BGR/RGBA/BGRA CUDA tensors into
+  normalized F32 NCHW or NTCHW Candle tensors.
 - `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
   and TD-MPC2 paths, including TD-MPC2 CEM/MPPI/iCEM planning latency.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
@@ -101,7 +101,7 @@ checkpoints, Hydra instantiation, or Lightning modules.
 - Define a deployment package layout:
   - `config.json`
   - preferred `model.safetensors`
-  - optional compatibility `weights.pt`
+  - legacy `weights.pt`
   - `preprocess.json`
   - `schema.json`
 - Add a package loader that validates:
@@ -135,17 +135,24 @@ Make image/video/state inputs first-class Rust runtime inputs.
   - ImageNet normalization where required;
   - frame/history stacking;
   - dtype and device transfer.
+- Add NVIDIA media ingestion:
+  - nvJPEG decode from encoded JPEG bytes into Candle CUDA RGB tensors;
+  - reusable CUDA RGB decode buffers;
+  - fused Candle CUDA resize/channel/normalize kernels;
+  - history-slot writes for LeWM/video frame windows;
+  - NVDEC video frame decode into CUDA buffers;
+  - NPP or fused CUDA color conversion for NV12/YUV video surfaces.
 - Add state/action preprocessing:
   - schema validation;
   - action scaling and clamping;
   - history stacking.
-- Keep heavy decode/resize dependencies optional.
-- Keep the core runtime able to accept already-decoded frame buffers or tensors.
+- Keep the core runtime able to accept decoded frame buffers or tensors.
 - Extend LeWM parity from synthetic tensors to raw image/frame inputs.
 
 **Done When**
 
-- Raw decoded image/video frames can become model-ready tensors in Rust.
+- Raw encoded image/video inputs and decoded image/video frames can become
+  model-ready tensors in Rust.
 - State and action inputs are validated and normalized in Rust.
 - Rust preprocessing matches Python transforms within documented tolerances.
 - CLIs can run from raw frame/state/action inputs, not only synthetic tensors.
@@ -201,7 +208,7 @@ Avoid rebuilding runtime state every control step.
   - action history;
   - frame buffers;
   - cached latents;
-  - optional warm-started candidate actions.
+  - warm-started candidate actions when enabled.
 - Initial API:
   - `reset(initial_observation)`;
   - `update_observation(observation)`;
@@ -233,9 +240,9 @@ overhead.
 
 - Add common planning types:
   - `PlanConfig` with horizon, samples, iterations, elite count/fraction,
-    action bounds, temperature/noise, optional seed, and optional deadline;
+    action bounds, temperature/noise, seed, and deadline;
   - `PlanResult` with first action, full action sequence, scores, best index,
-    iterations completed, elapsed time, and fallback status.
+    iterations completed, elapsed time, and result source.
 - Add a scorer interface around candidate tensors shaped
   `[batch, samples, horizon, action_dim]`.
 - Implement solvers in this order:
@@ -256,15 +263,13 @@ overhead.
 - `LeWmGoalScorer` adapts `LeWmSession` plus a goal embedding to the same
   scorer interface.
 - CEM/iCEM elite selection uses Candle sort/gather ops on the selected device.
-  `PlanResult::used_host_elite_selection` remains as fallback telemetry and is
-  false for the built-in planners.
+  `PlanResult::used_host_elite_selection` is false for the built-in planners.
 - `runtime-bench --model td-mpc2` reports CEM, MPPI, and iCEM planner latency
   using the same session/scorer path as deployment code.
-- Deadline fallback is implemented for zero-completed-iteration cases: CEM and
-  MPPI use a configured fallback action, while iCEM prefers its warm-start
-  sequence before falling back to the configured action. `PlanResult::fallback`
-  reports which path was used.
-- Planner configs expose an optional seed for deterministic host-generated
+- Deadline handling is implemented for zero-completed-iteration cases: CEM and
+  MPPI use a configured action, while iCEM prefers its warm-start sequence
+  before using the configured action. `PlanResult` reports which path was used.
+- Planner configs expose a seed for deterministic host-generated
   candidate noise that is moved to the selected Candle device, giving CPU/CUDA
   planner tests a repeatable sampling path while leaving deployment defaults
   backend-native.
@@ -290,8 +295,8 @@ Make control-loop timing predictable.
 - Deadline behavior:
   - return the best completed iteration if at least one iteration finished;
   - otherwise return the previous warm-start action if available;
-  - otherwise return a configured fallback action.
-- Surface timeout/fallback behavior in `PlanResult`.
+  - otherwise return a configured action.
+- Surface timeout behavior in `PlanResult`.
 - Optimize after benchmarks exist:
   - reduce avoidable tensor clones;
   - reduce host/device transfers;
@@ -300,9 +305,9 @@ Make control-loop timing predictable.
 
 **Done When**
 
-- Deadline fallback behavior is validated across CEM/MPPI/iCEM.
+- Deadline behavior is validated across CEM/MPPI/iCEM.
 - Deadline behavior is deterministic and tested.
-- Benchmarks report full planning latency. Fallback-rate reporting remains
+- Benchmarks report full planning latency. Deadline-source reporting remains
   pending.
 - Buffer reuse and allocation reduction are benchmarked and implemented where
   they reduce steady-state planner latency.

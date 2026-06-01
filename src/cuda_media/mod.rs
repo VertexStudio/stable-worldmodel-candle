@@ -4,6 +4,9 @@
 //! launches preprocessing kernels on the same CUDA stream Candle uses for model
 //! execution.
 
+#[cfg(feature = "nvjpeg")]
+pub mod nvjpeg;
+
 use std::fmt;
 
 use candle::{
@@ -158,6 +161,14 @@ impl CudaImagePreprocessor {
         &self.output
     }
 
+    pub fn input_shape(&self) -> PackedImageShape {
+        self.input_shape
+    }
+
+    pub fn config(&self) -> CudaImagePreprocess {
+        self.config
+    }
+
     pub fn preprocess_packed_u8(&mut self, input: &Tensor) -> Result<&Tensor> {
         validate_input_tensor(input, self.input_shape)?;
         let op = PackedU8ToNchwF32 {
@@ -226,6 +237,18 @@ impl CudaImageHistoryPreprocessor {
 
     pub fn output(&self) -> &Tensor {
         &self.output
+    }
+
+    pub fn input_shape(&self) -> PackedImageShape {
+        self.input_shape
+    }
+
+    pub fn history_len(&self) -> usize {
+        self.history_len
+    }
+
+    pub fn config(&self) -> CudaImagePreprocess {
+        self.config
     }
 
     pub fn preprocess_packed_u8_into_slot(

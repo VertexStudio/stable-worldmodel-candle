@@ -136,29 +136,40 @@ preprocess.json
 schema.json
 ```
 
-`weights.pt` is accepted as a compatibility fallback when `model.safetensors` is
-not present. `schema.json` describes observation names, observation kinds
+`weights.pt` is accepted for legacy artifacts when `model.safetensors` is not
+present. `schema.json` describes observation names, observation kinds
 (`state`, `image`, or `video`), observation shapes, and action dimensionality.
 `preprocess.json` records runtime preprocessing metadata such as image size,
 normalization, and action bounds.
 
-Core preprocessing currently supports already-decoded RGB frame buffers and
-state/action arrays without adding image or video decoding dependencies. RGB
-frames can be resized, normalized, stacked as `[batch, time, channels, height,
-width]`, converted to the latest `[batch, channels, height, width]` frame for
-pixel models, and moved to the selected Candle device. State vectors can be
-optionally mean/std normalized, and actions can be clamped to configured
-bounds. Optional file/video decoding can be layered on top of this later
-without changing the core tensor path.
+Core preprocessing supports already-decoded RGB frame buffers and state/action
+arrays. RGB frames can be resized, normalized, stacked as `[batch, time,
+channels, height, width]`, converted to the latest `[batch, channels, height,
+width]` frame for pixel models, and moved to the selected Candle device. State
+vectors can be mean/std normalized, and actions can be clamped to configured
+bounds. CUDA media ingestion adds the NVIDIA path for encoded image bytes and
+CUDA-resident packed frame tensors.
 TD-MPC2 pixel inputs use the upstream CNN layout (`cnn.0`, `cnn.2`, `cnn.4`,
 `cnn.6`, then `pixel_encoder`) and accept either NCHW or NHWC tensors before
 SimNorm.
 
 ## NVIDIA Media Runtime
 
-CUDA builds expose `cuda_media` for NVIDIA-first image ingestion. The current
-path owns a reusable model-ready Candle CUDA tensor and launches a fused CUDA
-kernel on Candle's CUDA stream:
+CUDA builds expose `cuda_media` for NVIDIA media ingestion. With the `nvjpeg`
+feature enabled, JPEG bytes are decoded by NVIDIA nvJPEG directly into a
+Candle CUDA `U8` tensor on Candle's CUDA stream, then the fused CUDA
+preprocessor produces model-ready tensors:
+
+```text
+encoded JPEG bytes
+  -> nvJPEG decode
+  -> U8 RGB interleaved Candle CUDA tensor [1, height, width, 3]
+  -> fused CUDA resize/reorder/normalize
+  -> F32 NCHW Candle CUDA tensor
+```
+
+The lower-level packed-frame path accepts existing CUDA tensors and owns a
+reusable model-ready output tensor:
 
 ```text
 packed U8 RGB/BGR/RGBA/BGRA CUDA tensor
@@ -169,13 +180,21 @@ packed U8 RGB/BGR/RGBA/BGRA CUDA tensor
   -> F32 NCHW Candle CUDA tensor
 ```
 
-`CudaImagePreprocessor` is the first device-resident bridge for nvJPEG,
-nvImageCodec, NPP, and NVDEC work. It writes into a persistent output tensor
-that can be passed directly to LeWM or TD-MPC2 pixel paths without host
-readback.
-`CudaImageHistoryPreprocessor` writes the same decoded frame format into a
-selected `[batch, time, 3, height, width]` slot for LeWM image-history and video
-pipelines.
+`NvJpegDecoder::decode_rgb_interleaved_into` writes into caller-owned CUDA
+RGB buffers for reuse. `decode_preprocessed_nchw_into` decodes and preprocesses
+into a persistent `CudaImagePreprocessor` output. `CudaImageHistoryPreprocessor`
+writes the same decoded frame format into a selected `[batch, time, 3, height,
+width]` slot for LeWM image-history and video pipelines.
+
+Build and validate the NVIDIA JPEG path:
+
+```bash
+cargo check --features nvjpeg --all-targets
+cargo test --features nvjpeg decodes_jpeg_to_cuda_rgb_tensor -- --nocapture
+```
+
+Set `CUDA_HOME` or `CUDA_PATH` when CUDA is installed outside the standard
+`/usr/local/cuda*` locations so Cargo can find `libnvjpeg.so`.
 
 For backend parity, generate CPU and CUDA Python fixtures from identical CPU
 input tensors, then compare them before comparing Candle:
@@ -252,8 +271,8 @@ Full LeWM CUDA parity matrix:
 tools/cuda_parity.sh
 ```
 
-The matrix runs environment sanity checks, Rust CUDA build/tests, optional
-cuDNN checks when detected, Python CPU-vs-CUDA fixture diffs, Candle CPU vs
+The matrix runs environment sanity checks, Rust CUDA build/tests, cuDNN checks
+when detected, Python CPU-vs-CUDA fixture diffs, Candle CPU vs
 Python CPU, Candle CUDA vs Python CUDA, and Candle CUDA vs Python CPU. Set
 `STABLE_WORLDMODEL_ROOT`, `MODEL`, `CPU_FIXTURE`, `CUDA_FIXTURE`,
 `PYTHON_VERSION`, `RUN_CUDNN`, or `CARGO_LOCKED=0` to override defaults.
@@ -383,22 +402,22 @@ selection instead of host-side ranking, and MPPI computes its softmax-weighted
 control update on the selected Candle device. iCEM carries elites between
 iterations and keeps a shifted warm-start sequence between `plan` calls. If a
 deadline expires before any iteration completes, CEM/MPPI can return a
-configured fallback action and iCEM first tries its previous warm-start
-sequence. `PlanResult::fallback` identifies whether a returned action came from
-normal planning, a warm-start fallback, or a configured fallback action.
-Planner configs also accept an optional `seed`; when set, candidate noise is
+configured action and iCEM first tries its previous warm-start sequence.
+`PlanResult` records whether the selected action came from normal planning,
+warm-start, or configured-action deadline handling. Planner configs also accept
+a `seed`; when set, candidate noise is
 generated by a deterministic host RNG and then moved to the selected Candle
 device, which makes planner sampling replayable across CPU/CUDA validation
 runs. Leave `seed` unset for backend-native random sampling in deployment.
 
-Latest local planner fallback and seeded-sampling validation, run on
+Latest local planner deadline and seeded-sampling validation, run on
 2026-05-29:
 
 - `cargo test --locked` passed.
 - `cargo test --locked --features cuda` passed.
-- Fallback tests cover CEM/MPPI configured-action fallback and iCEM warm-start
-  fallback without requiring the scorer/session to be reset; seeded CEM tests
-  verify deterministic replay of candidate sampling.
+- Deadline tests cover CEM/MPPI configured actions and iCEM warm-start behavior
+  without requiring the scorer/session to be reset; seeded CEM tests verify
+  deterministic replay of candidate sampling.
 
 ## C ABI
 
@@ -509,6 +528,6 @@ checkpoint plus config.
 - Add compact fixture integration tests once small public test weights are available.
 - Add TD-MPC2 pixel fixture parity and policy rollout sampling.
 - Add planner buffer reuse/preallocation for lower steady-state allocation cost.
-- Add optional safetensors export guidance for deployments that prefer mmap loading.
+- Add safetensors export guidance for deployments that prefer mmap loading.
 - Add C ABI overhead benchmarks for TD-MPC2 and LeWM deployment calls.
 - Add additional sibling model backends starting from the simplest production inference path for each model.

@@ -18,6 +18,7 @@ candle-transformers = { version = "0.10.2" }
 accelerate-src = { version = "0.3.2", optional = true }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"], optional = true }
 hf-hub = { version = "0.5.0", default-features = false, features = ["ureq"], optional = true }
+nvjpeg-sys = { version = "0.1.0", optional = true }
 rand = "0.9.4"
 rand_distr = "0.5.1"
 
@@ -39,6 +40,7 @@ mkl = [
     "candle-nn/mkl",
     "candle-transformers/mkl",
 ]
+nvjpeg = ["cuda", "dep:nvjpeg-sys"]
 
 [lib]
 name = "stable_worldmodel_candle"

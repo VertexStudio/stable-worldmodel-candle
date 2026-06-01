@@ -1851,6 +1851,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "nvjpeg-sys"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92e410abdcbb94c537194b0cb50b95c3692d4cf8d912f8fb026dba59b3709542"
+
+[[package]]
 name = "objc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2530,6 +2536,7 @@ dependencies = [
  "clap",
  "hf-hub",
  "intel-mkl-src",
+ "nvjpeg-sys",
  "rand",
  "rand_distr",
  "serde",
