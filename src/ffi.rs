@@ -192,6 +192,40 @@ pub struct SwmLeWm {
     icem_planner: Option<IcemPlanner>,
 }
 
+impl SwmLeWm {
+    #[doc(hidden)]
+    pub fn synthetic_for_bench(
+        config: LeWmConfig,
+        dtype: DType,
+        device: &Device,
+        pixels: &Tensor,
+        goal_emb: &Tensor,
+    ) -> Result<Self, candle::Error> {
+        let action_dim = config.action_encoder.input_dim;
+        let image_size = config.encoder.image_size;
+        let history_size = config.history_size;
+        let model = LeWm::new(config, checkpoint::empty_var_builder(dtype, device))?;
+        let mut session = LeWmSession::new(model, device.clone(), dtype);
+        session.reset_pixels(pixels)?;
+        let goal_emb = goal_emb.to_device(device)?.to_dtype(dtype)?;
+        Ok(Self {
+            session,
+            goal_emb: Some(goal_emb),
+            action_dim,
+            image_size,
+            history_size,
+            image_preprocess: ImagePreprocess {
+                output_height: image_size,
+                output_width: image_size,
+                mean: [0.485, 0.456, 0.406],
+                std: [0.229, 0.224, 0.225],
+            },
+            action_bounds: ActionBounds::symmetric(action_dim, 1.0),
+            icem_planner: None,
+        })
+    }
+}
+
 pub struct SwmCudaImage {
     tensor: Tensor,
     shape: PackedImageShape,

@@ -287,6 +287,8 @@ overhead.
 - `runtime-bench --model td-mpc2` reports representative TD-MPC2 C ABI rows for
   actor mean action, actor policy rollout, sampled policy rollout, and CEM
   planning.
+- `runtime-bench --model le-wm` reports representative LeWM C ABI planner rows
+  for CEM, MPPI, and iCEM.
 - TD-MPC2 sampled actor rollout uses explicit CUDA noise tensors for parity and
   generated Candle CUDA noise for deployment runs.
 - Planner seeded sampling now resets Candle's selected-device CUDA RNG and keeps
@@ -383,7 +385,8 @@ Expose the stable runtime without forcing a Python service.
 - Rust users can load a deployment package, create a session, and plan actions.
 - C callers can load a package, submit observations, and receive actions through
   a small stable ABI.
-- TD-MPC2 C ABI overhead is measured separately from core runtime latency.
+- TD-MPC2 and LeWM C ABI overhead are measured separately from core runtime
+  latency.
 
 ## Standard Checks
 

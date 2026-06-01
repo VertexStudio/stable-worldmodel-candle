@@ -10,7 +10,8 @@ use serde_json::json;
 use stable_worldmodel_candle::{
     checkpoint,
     ffi::{
-        SwmCemPlanConfig, SwmStatus, SwmTdMpc2, swm_last_error_message,
+        SwmCemPlanConfig, SwmIcemPlanConfig, SwmLeWm, SwmMppiPlanConfig, SwmStatus, SwmTdMpc2,
+        swm_last_error_message, swm_lewm_plan_cem, swm_lewm_plan_icem, swm_lewm_plan_mppi,
         swm_tdmpc2_actor_mean_action, swm_tdmpc2_plan_cem, swm_tdmpc2_rollout_actor_mean,
         swm_tdmpc2_rollout_actor_sample,
     },
@@ -176,6 +177,55 @@ fn bench_lewm(
     let rollout = model.rollout_embeddings(&emb_init, &actions)?;
     let goal = emb.i((.., emb.dim(1)? - 1, ..))?;
 
+    if args.samples < 2 {
+        anyhow::bail!("LeWM planner benchmarks require --samples >= 2");
+    }
+    if args.planner_iterations == 0 {
+        anyhow::bail!("--planner-iterations must be greater than zero");
+    }
+    let elites = elite_count(args);
+    if elites < 2 {
+        anyhow::bail!("LeWM planner benchmarks require --elites >= 2");
+    }
+    if elites > args.samples {
+        anyhow::bail!("--elites cannot exceed --samples");
+    }
+
+    let mut ffi_handle = SwmLeWm::synthetic_for_bench(
+        LeWmConfig::tiny_patch14_224(args.action_dim),
+        dtype,
+        device,
+        &pixels,
+        &goal,
+    )?;
+    let mut ffi_action = vec![0f32; args.batch_size * args.action_dim];
+    let mut ffi_sequence = vec![0f32; args.batch_size * args.horizon * args.action_dim];
+    let mut ffi_cost = vec![0f32; args.batch_size];
+    let ffi_cem_cfg = SwmCemPlanConfig {
+        horizon: args.horizon,
+        samples: args.samples,
+        elites,
+        iterations: args.planner_iterations,
+        init_std: 1.0,
+        min_std: 1e-3,
+    };
+    let ffi_mppi_cfg = SwmMppiPlanConfig {
+        horizon: args.horizon,
+        samples: args.samples,
+        iterations: args.planner_iterations,
+        noise_std: 1.0,
+        temperature: 1.0,
+    };
+    let ffi_icem_cfg = SwmIcemPlanConfig {
+        horizon: args.horizon,
+        samples: args.samples,
+        elites,
+        keep_elites: elites.min(args.samples),
+        iterations: args.planner_iterations,
+        init_std: 1.0,
+        min_std: 1e-3,
+    };
+
     Ok(vec![
         bench("encode", args, device, || {
             model.encode_pixels(&pixels)?;
@@ -201,6 +251,42 @@ fn bench_lewm(
             let goal = emb.i((.., emb.dim(1)? - 1, ..))?;
             model.goal_cost(&rollout, &goal)?;
             Ok(())
+        })?,
+        bench("ffi_plan_cem", args, device, || {
+            let status = unsafe {
+                swm_lewm_plan_cem(
+                    &mut ffi_handle,
+                    ffi_cem_cfg,
+                    ffi_action.as_mut_ptr(),
+                    ffi_sequence.as_mut_ptr(),
+                    ffi_cost.as_mut_ptr(),
+                )
+            };
+            ensure_ffi_status(status)
+        })?,
+        bench("ffi_plan_mppi", args, device, || {
+            let status = unsafe {
+                swm_lewm_plan_mppi(
+                    &mut ffi_handle,
+                    ffi_mppi_cfg,
+                    ffi_action.as_mut_ptr(),
+                    ffi_sequence.as_mut_ptr(),
+                    ffi_cost.as_mut_ptr(),
+                )
+            };
+            ensure_ffi_status(status)
+        })?,
+        bench("ffi_plan_icem", args, device, || {
+            let status = unsafe {
+                swm_lewm_plan_icem(
+                    &mut ffi_handle,
+                    ffi_icem_cfg,
+                    ffi_action.as_mut_ptr(),
+                    ffi_sequence.as_mut_ptr(),
+                    ffi_cost.as_mut_ptr(),
+                )
+            };
+            ensure_ffi_status(status)
         })?,
     ])
 }
