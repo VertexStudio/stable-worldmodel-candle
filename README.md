@@ -499,10 +499,13 @@ session and goal embedding with `planner::LeWmGoalScorer`.
 These planners keep candidate tensors, model rollout, and scoring on the
 selected Candle device. CEM and iCEM use Candle sort/gather ops for elite
 selection instead of host-side ranking, and MPPI computes its softmax-weighted
-control update on the selected Candle device. iCEM carries elites between
-iterations and keeps a shifted warm-start sequence between `plan` calls. If a
-deadline expires before any iteration completes, CEM/MPPI can return a
-configured action and iCEM first tries its previous warm-start sequence.
+control update on the selected Candle device. Each planner also keeps a small
+workspace cache for action-bound tensors and initial mean/std tensors, so those
+fixed hot-path tensors are not rebuilt on every control step. iCEM carries
+elites between iterations and keeps a shifted warm-start sequence between
+`plan` calls. If a deadline expires before any iteration completes, CEM/MPPI
+can return a configured action and iCEM first tries its previous warm-start
+sequence.
 `PlanResult` records whether the selected action came from normal planning,
 warm-start, or configured-action deadline handling. Planner configs also accept
 a `seed`; when set, the planner owns a cuRAND generator on the Candle CUDA
@@ -658,5 +661,5 @@ checkpoint plus config.
 ## Remaining Work
 
 - Add compact fixture integration tests once small public test weights are available.
-- Add planner buffer reuse/preallocation for lower steady-state allocation cost.
+- Extend planner buffer reuse to larger candidate, score, latent, and rollout tensors where it lowers steady-state latency.
 - Add additional sibling model backends starting from the simplest production inference path for each model.

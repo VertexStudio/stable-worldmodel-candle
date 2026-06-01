@@ -1,11 +1,14 @@
 use std::{
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use candle::{
-    CudaStorage, DType, Device, IndexOp, Result, Storage, Tensor, cuda_backend::cudarc,
-    op::BackpropOp,
+    CudaStorage, DType, Device, DeviceLocation, IndexOp, Result, Storage, Tensor,
+    cuda_backend::cudarc, op::BackpropOp,
 };
 use candle_nn::ops;
 
@@ -346,6 +349,7 @@ pub struct PlanResult {
 pub struct CemPlanner {
     config: CemConfig,
     rng: PlannerRng,
+    workspace: PlannerWorkspace,
 }
 
 impl CemPlanner {
@@ -353,6 +357,7 @@ impl CemPlanner {
         Self {
             config,
             rng: PlannerRng::new(),
+            workspace: PlannerWorkspace::new(),
         }
     }
 
@@ -387,9 +392,18 @@ impl CemPlanner {
             )?,
         )?;
 
-        let mut mean = Tensor::zeros((batch, cfg.horizon, cfg.action_dim), dtype, device)?;
-        let mut std = Tensor::ones((batch, cfg.horizon, cfg.action_dim), dtype, device)?
-            .affine(cfg.init_std as f64, 0.0)?;
+        let mut mean =
+            self.workspace
+                .sequence(batch, cfg.horizon, cfg.action_dim, dtype, device, 0.0)?;
+        let mut std = self.workspace.sequence(
+            batch,
+            cfg.horizon,
+            cfg.action_dim,
+            dtype,
+            device,
+            cfg.init_std,
+        )?;
+        let (low, high) = self.workspace.bounds(&cfg.action_bounds, dtype, device)?;
         let mut last_candidates = None;
         let mut last_scores = None;
         let mut iterations_completed = 0;
@@ -417,7 +431,8 @@ impl CemPlanner {
                 &mean,
                 &std,
                 cfg.samples,
-                &cfg.action_bounds,
+                &low,
+                &high,
                 dtype,
                 device,
                 &mut sampler,
@@ -462,6 +477,7 @@ impl CemPlanner {
 pub struct MppiPlanner {
     config: MppiConfig,
     rng: PlannerRng,
+    workspace: PlannerWorkspace,
 }
 
 impl MppiPlanner {
@@ -469,6 +485,7 @@ impl MppiPlanner {
         Self {
             config,
             rng: PlannerRng::new(),
+            workspace: PlannerWorkspace::new(),
         }
     }
 
@@ -503,9 +520,18 @@ impl MppiPlanner {
             )?,
         )?;
 
-        let mut mean = Tensor::zeros((batch, cfg.horizon, cfg.action_dim), dtype, device)?;
-        let std = Tensor::ones((batch, cfg.horizon, cfg.action_dim), dtype, device)?
-            .affine(cfg.noise_std as f64, 0.0)?;
+        let mut mean =
+            self.workspace
+                .sequence(batch, cfg.horizon, cfg.action_dim, dtype, device, 0.0)?;
+        let std = self.workspace.sequence(
+            batch,
+            cfg.horizon,
+            cfg.action_dim,
+            dtype,
+            device,
+            cfg.noise_std,
+        )?;
+        let (low, high) = self.workspace.bounds(&cfg.action_bounds, dtype, device)?;
         let mut last_scores = None;
         let mut iterations_completed = 0;
         let mut deadline_reached = false;
@@ -532,7 +558,8 @@ impl MppiPlanner {
                 &mean,
                 &std,
                 cfg.samples,
-                &cfg.action_bounds,
+                &low,
+                &high,
                 dtype,
                 device,
                 &mut sampler,
@@ -573,6 +600,7 @@ pub struct IcemPlanner {
     config: IcemConfig,
     warm_start: Option<Tensor>,
     rng: PlannerRng,
+    workspace: PlannerWorkspace,
 }
 
 impl IcemPlanner {
@@ -581,6 +609,7 @@ impl IcemPlanner {
             config,
             warm_start: None,
             rng: PlannerRng::new(),
+            workspace: PlannerWorkspace::new(),
         }
     }
 
@@ -628,8 +657,15 @@ impl IcemPlanner {
         )?;
 
         let mut mean = self.initial_mean(batch, dtype, device)?;
-        let mut std = Tensor::ones((batch, cfg.horizon, cfg.action_dim), dtype, device)?
-            .affine(cfg.init_std as f64, 0.0)?;
+        let mut std = self.workspace.sequence(
+            batch,
+            cfg.horizon,
+            cfg.action_dim,
+            dtype,
+            device,
+            cfg.init_std,
+        )?;
+        let (low, high) = self.workspace.bounds(&cfg.action_bounds, dtype, device)?;
         let mut carried_elites = None;
         let mut last_candidates = None;
         let mut last_scores = None;
@@ -667,7 +703,8 @@ impl IcemPlanner {
                 &mean,
                 &std,
                 cfg.samples,
-                &cfg.action_bounds,
+                &low,
+                &high,
                 dtype,
                 device,
                 &mut sampler,
@@ -731,7 +768,9 @@ impl IcemPlanner {
                 sequence.dims(),
                 [batch, cfg.horizon, cfg.action_dim]
             ),
-            None => Tensor::zeros(shape, dtype, device),
+            None => self
+                .workspace
+                .sequence(batch, cfg.horizon, cfg.action_dim, dtype, device, 0.0),
         }
     }
 
@@ -857,7 +896,8 @@ fn sample_candidates(
     mean: &Tensor,
     std: &Tensor,
     samples: usize,
-    bounds: &ActionBounds,
+    low: &Tensor,
+    high: &Tensor,
     dtype: DType,
     device: &Device,
     sampler: &mut PlanSampler,
@@ -869,7 +909,150 @@ fn sample_candidates(
     let mean = mean.unsqueeze(1)?.broadcast_as(shape)?;
     let std = std.unsqueeze(1)?.broadcast_as(shape)?;
     let candidates = mean.broadcast_add(&noise.broadcast_mul(&std)?)?;
-    clamp_actions(&candidates, bounds, dtype, device)
+    clamp_actions(&candidates, low, high)
+}
+
+#[derive(Debug)]
+struct PlannerWorkspace {
+    bounds: Mutex<Option<CachedBounds>>,
+    sequence: Mutex<Option<CachedSequence>>,
+}
+
+impl PlannerWorkspace {
+    fn new() -> Self {
+        Self {
+            bounds: Mutex::new(None),
+            sequence: Mutex::new(None),
+        }
+    }
+
+    fn bounds(
+        &self,
+        bounds: &ActionBounds,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<(Tensor, Tensor)> {
+        let location = device.location();
+        let mut cache = lock_workspace(&self.bounds)?;
+        if let Some(cached) = cache.as_ref()
+            && cached.matches(bounds, dtype, location)
+        {
+            return Ok((cached.low.clone(), cached.high.clone()));
+        }
+
+        let action_dim = bounds.low.len();
+        let low = Tensor::from_vec(bounds.low.clone(), (action_dim,), device)?
+            .to_dtype(dtype)?
+            .reshape((1, 1, 1, action_dim))?;
+        let high = Tensor::from_vec(bounds.high.clone(), (action_dim,), device)?
+            .to_dtype(dtype)?
+            .reshape((1, 1, 1, action_dim))?;
+        *cache = Some(CachedBounds {
+            location,
+            dtype,
+            low_values: bounds.low.clone(),
+            high_values: bounds.high.clone(),
+            low: low.clone(),
+            high: high.clone(),
+        });
+        Ok((low, high))
+    }
+
+    fn sequence(
+        &self,
+        batch: usize,
+        horizon: usize,
+        action_dim: usize,
+        dtype: DType,
+        device: &Device,
+        value: f32,
+    ) -> Result<Tensor> {
+        let location = device.location();
+        let mut cache = lock_workspace(&self.sequence)?;
+        if let Some(cached) = cache.as_ref()
+            && cached.matches(batch, horizon, action_dim, dtype, location, value)
+        {
+            return Ok(cached.tensor.clone());
+        }
+
+        let shape = (batch, horizon, action_dim);
+        let tensor = if value == 0.0 {
+            Tensor::zeros(shape, dtype, device)?
+        } else {
+            Tensor::ones(shape, dtype, device)?.affine(value as f64, 0.0)?
+        };
+        *cache = Some(CachedSequence {
+            location,
+            dtype,
+            batch,
+            horizon,
+            action_dim,
+            value_bits: value.to_bits(),
+            tensor: tensor.clone(),
+        });
+        Ok(tensor)
+    }
+}
+
+impl Clone for PlannerWorkspace {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug)]
+struct CachedBounds {
+    location: DeviceLocation,
+    dtype: DType,
+    low_values: Vec<f32>,
+    high_values: Vec<f32>,
+    low: Tensor,
+    high: Tensor,
+}
+
+impl CachedBounds {
+    fn matches(&self, bounds: &ActionBounds, dtype: DType, location: DeviceLocation) -> bool {
+        self.location == location
+            && self.dtype == dtype
+            && self.low_values == bounds.low
+            && self.high_values == bounds.high
+    }
+}
+
+#[derive(Debug)]
+struct CachedSequence {
+    location: DeviceLocation,
+    dtype: DType,
+    batch: usize,
+    horizon: usize,
+    action_dim: usize,
+    value_bits: u32,
+    tensor: Tensor,
+}
+
+impl CachedSequence {
+    fn matches(
+        &self,
+        batch: usize,
+        horizon: usize,
+        action_dim: usize,
+        dtype: DType,
+        location: DeviceLocation,
+        value: f32,
+    ) -> bool {
+        self.location == location
+            && self.dtype == dtype
+            && self.batch == batch
+            && self.horizon == horizon
+            && self.action_dim == action_dim
+            && self.value_bits == value.to_bits()
+    }
+}
+
+fn lock_workspace<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
+    mutex
+        .lock()
+        .map_err(|_| candle::Error::Msg("planner workspace mutex poisoned".to_string()))
 }
 
 #[derive(Debug)]
@@ -1034,20 +1217,8 @@ fn shift_sequence_for_warm_start(sequence: &Tensor) -> Result<Tensor> {
     Tensor::cat(&[&tail, &last], 1)
 }
 
-fn clamp_actions(
-    candidates: &Tensor,
-    bounds: &ActionBounds,
-    dtype: DType,
-    device: &Device,
-) -> Result<Tensor> {
-    let (_, _, _, action_dim) = candidates.dims4()?;
-    let low = Tensor::from_vec(bounds.low.clone(), (action_dim,), device)?
-        .to_dtype(dtype)?
-        .reshape((1, 1, 1, action_dim))?;
-    let high = Tensor::from_vec(bounds.high.clone(), (action_dim,), device)?
-        .to_dtype(dtype)?
-        .reshape((1, 1, 1, action_dim))?;
-    candidates.broadcast_maximum(&low)?.broadcast_minimum(&high)
+fn clamp_actions(candidates: &Tensor, low: &Tensor, high: &Tensor) -> Result<Tensor> {
+    candidates.broadcast_maximum(low)?.broadcast_minimum(high)
 }
 
 fn enforce_min_std(std: &Tensor, min_std: f32) -> Result<Tensor> {
@@ -1154,6 +1325,26 @@ mod tests {
         let err = sorted_score_indices(&scores).unwrap_err();
 
         assert!(err.to_string().contains("non-finite"));
+        Ok(())
+    }
+
+    #[test]
+    fn planner_workspace_reuses_cached_tensors() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let workspace = PlannerWorkspace::new();
+        let bounds = ActionBounds::symmetric(4, 0.5);
+
+        let (low_a, high_a) = workspace.bounds(&bounds, DType::F32, &device)?;
+        let (low_b, high_b) = workspace.bounds(&bounds, DType::F32, &device)?;
+        let zeros_a = workspace.sequence(2, 3, 4, DType::F32, &device, 0.0)?;
+        let zeros_b = workspace.sequence(2, 3, 4, DType::F32, &device, 0.0)?;
+        let std_a = workspace.sequence(2, 3, 4, DType::F32, &device, 0.75)?;
+        let std_b = workspace.sequence(2, 3, 4, DType::F32, &device, 0.75)?;
+
+        assert_eq!(low_a.id(), low_b.id());
+        assert_eq!(high_a.id(), high_b.id());
+        assert_eq!(zeros_a.id(), zeros_b.id());
+        assert_eq!(std_a.id(), std_b.id());
         Ok(())
     }
 }

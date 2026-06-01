@@ -298,6 +298,8 @@ overhead.
 - Planner seeded sampling now uses planner-owned cuRAND generators on the Candle
   CUDA stream, reserves non-overlapping offset ranges per `plan` call, and keeps
   candidate noise generation inside CUDA tensors.
+- CEM/MPPI/iCEM planners now cache reusable action-bound tensors and initial
+  mean/std tensors per CUDA device location, dtype, shape, and scalar value.
 - Deadline handling is implemented for zero-completed-iteration cases: CEM and
   MPPI use a configured action, while iCEM prefers its warm-start sequence
   before using the configured action. `PlanResult` reports which path was used.
@@ -340,8 +342,8 @@ Make control-loop timing predictable.
 - Deadline behavior is deterministic and tested.
 - Benchmarks report full planning latency. Deadline-source reporting remains
   pending.
-- Buffer reuse and allocation reduction are benchmarked and implemented where
-  they reduce steady-state planner latency.
+- Larger candidate, score, latent, and rollout buffer reuse is benchmarked and
+  implemented where it reduces steady-state planner latency.
 - Repeated planning loops show lower p95/p99 latency after optimization.
 
 ## Phase 8: Precision Modes
