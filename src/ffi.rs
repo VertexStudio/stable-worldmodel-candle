@@ -946,6 +946,52 @@ pub unsafe extern "C" fn swm_tdmpc2_plan_cem(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_tdmpc2_actor_mean_action(
+    handle: *mut SwmTdMpc2,
+    action_out: *mut f32,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let action = handle
+            .session
+            .actor_mean_action()
+            .map_err(FfiError::runtime)?;
+        let action = flatten2(&action)?;
+        unsafe {
+            copy_required(&action, action_out, "action_out")?;
+        }
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn swm_tdmpc2_rollout_actor_mean(
+    handle: *mut SwmTdMpc2,
+    horizon: usize,
+    actions_out: *mut f32,
+    rewards_out: *mut f32,
+) -> SwmStatus {
+    ffi_guard(|| {
+        let handle = unsafe { required_mut(handle, "handle")? };
+        let (actions, rewards, _) = handle
+            .session
+            .rollout_actor_mean(horizon)
+            .map_err(FfiError::runtime)?;
+        let actions = flatten3(&actions)?;
+        unsafe {
+            copy_required(&actions, actions_out, "actions_out")?;
+        }
+        if !rewards_out.is_null() {
+            let rewards = flatten3(&rewards)?;
+            unsafe {
+                copy_optional(&rewards, rewards_out);
+            }
+        }
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn swm_tdmpc2_plan_mppi(
     handle: *mut SwmTdMpc2,
     ffi_config: SwmMppiPlanConfig,
@@ -1729,5 +1775,50 @@ mod tests {
         let err = tdmpc2_observation_dims(&config).unwrap_err();
         assert_eq!(err.status, SwmStatus::InvalidArgument);
         assert!(err.message.contains("proprioceptive"));
+    }
+
+    #[test]
+    fn tdmpc2_actor_policy_c_abi_writes_outputs() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let dtype = DType::F32;
+        let action_dim = 4;
+        let model = TdMpc2::new(
+            TdMpc2Config::state_only(12, action_dim),
+            checkpoint::empty_var_builder(dtype, &device),
+        )?;
+        let mut session = TdMpc2Session::new(model, device.clone(), dtype);
+        let state = Tensor::randn(0f32, 1f32, (2, 12), &device)?;
+        session.reset_state(&state)?;
+
+        let mut handle = SwmTdMpc2 {
+            session,
+            state_dim: Some(12),
+            image_size: None,
+            image_preprocess: None,
+            action_dim,
+            action_bounds: ActionBounds::symmetric(action_dim, 1.0),
+            icem_planner: None,
+        };
+
+        let mut action = vec![0f32; 2 * action_dim];
+        let status = unsafe { swm_tdmpc2_actor_mean_action(&mut handle, action.as_mut_ptr()) };
+        assert_eq!(status, SwmStatus::Ok);
+        assert!(action.iter().all(|value| value.is_finite()));
+
+        let horizon = 3;
+        let mut actions = vec![0f32; 2 * horizon * action_dim];
+        let mut rewards = vec![0f32; 2 * horizon];
+        let status = unsafe {
+            swm_tdmpc2_rollout_actor_mean(
+                &mut handle,
+                horizon,
+                actions.as_mut_ptr(),
+                rewards.as_mut_ptr(),
+            )
+        };
+        assert_eq!(status, SwmStatus::Ok);
+        assert!(actions.iter().all(|value| value.is_finite()));
+        assert!(rewards.iter().all(|value| value.is_finite()));
+        Ok(())
     }
 }

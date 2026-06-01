@@ -7,9 +7,9 @@ use stable_worldmodel_candle::ffi::{
     swm_last_error_message, swm_lewm_clear_icem_warm_start, swm_lewm_free, swm_lewm_load,
     swm_lewm_plan_cem, swm_lewm_reset_cuda_image_history, swm_lewm_reset_pixels,
     swm_lewm_set_goal_pixels, swm_nvdec_decoder_create_420, swm_nvdec_decoder_free,
-    swm_nvdec_query_420, swm_tdmpc2_clear_icem_warm_start, swm_tdmpc2_free, swm_tdmpc2_load,
-    swm_tdmpc2_plan_icem, swm_tdmpc2_reset_cuda_image, swm_tdmpc2_reset_pixels,
-    swm_tdmpc2_reset_state_pixels,
+    swm_nvdec_query_420, swm_tdmpc2_actor_mean_action, swm_tdmpc2_clear_icem_warm_start,
+    swm_tdmpc2_free, swm_tdmpc2_load, swm_tdmpc2_plan_icem, swm_tdmpc2_reset_cuda_image,
+    swm_tdmpc2_reset_pixels, swm_tdmpc2_reset_state_pixels, swm_tdmpc2_rollout_actor_mean,
 };
 
 #[test]
@@ -185,6 +185,32 @@ fn ffi_plan_icem_rejects_null_handle() {
             action.as_mut_ptr(),
             ptr::null_mut(),
             ptr::null_mut(),
+        )
+    };
+
+    assert_eq!(status, SwmStatus::NullPointer);
+    assert!(last_error().contains("handle"));
+}
+
+#[test]
+fn ffi_actor_mean_action_rejects_null_handle() {
+    let mut action = [0f32; 4];
+    let status = unsafe { swm_tdmpc2_actor_mean_action(ptr::null_mut(), action.as_mut_ptr()) };
+
+    assert_eq!(status, SwmStatus::NullPointer);
+    assert!(last_error().contains("handle"));
+}
+
+#[test]
+fn ffi_rollout_actor_mean_rejects_null_handle() {
+    let mut actions = [0f32; 12];
+    let mut rewards = [0f32; 3];
+    let status = unsafe {
+        swm_tdmpc2_rollout_actor_mean(
+            ptr::null_mut(),
+            3,
+            actions.as_mut_ptr(),
+            rewards.as_mut_ptr(),
         )
     };
 

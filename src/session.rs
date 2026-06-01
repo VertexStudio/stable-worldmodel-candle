@@ -139,6 +139,13 @@ impl TdMpc2Session {
         self.model.actor_mean_action(z)
     }
 
+    pub fn rollout_actor_mean(&self, horizon: usize) -> Result<(Tensor, Tensor, Tensor)> {
+        let z = self.z.as_ref().ok_or_else(|| {
+            candle::Error::Msg("TdMpc2Session must be reset before actor rollout".to_string())
+        })?;
+        self.model.rollout_actor_mean(z, horizon)
+    }
+
     pub fn score_candidates(&self, action_candidates: &Tensor) -> Result<Tensor> {
         let observations = self.observations.as_ref().ok_or_else(|| {
             candle::Error::Msg("TdMpc2Session must be reset before scoring candidates".to_string())

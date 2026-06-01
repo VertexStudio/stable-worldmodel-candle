@@ -246,6 +246,13 @@ SwmStatus swm_tdmpc2_plan_cem(SwmTdMpc2 *handle,
                               float *sequence_out,
                               float *best_cost_out);
 
+SwmStatus swm_tdmpc2_actor_mean_action(SwmTdMpc2 *handle, float *action_out);
+
+SwmStatus swm_tdmpc2_rollout_actor_mean(SwmTdMpc2 *handle,
+                                        size_t horizon,
+                                        float *actions_out,
+                                        float *rewards_out);
+
 SwmStatus swm_tdmpc2_plan_mppi(SwmTdMpc2 *handle,
                                SwmMppiPlanConfig config,
                                float *action_out,

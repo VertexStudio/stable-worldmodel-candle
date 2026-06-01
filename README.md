@@ -40,8 +40,9 @@ compatibility is not a reason to keep slower runtime paths in this crate.
   conditional predictor, latent rollout, goal embedding, goal cost, session
   caching, and Rust-native goal planning.
 - TD-MPC2 runtime: state/vector, pixel, and mixed pixel+state observation
-  encoders; latent dynamics; reward/Q heads; actor mean action; candidate
-  scoring; session caching; and Rust-native MPC planning.
+  encoders; latent dynamics; reward/Q heads; actor mean action; actor-mean
+  policy rollout; candidate scoring; session caching; and Rust-native MPC
+  planning.
 - NVIDIA media path: nvJPEG decode into Candle CUDA tensors, packed
   RGB/BGR/RGBA/BGRA CUDA frame preprocessing, NV12 CUDA surface preprocessing,
   direct `libnvcuvid` NVDECODE capability probing and decoder lifecycle,
@@ -390,19 +391,21 @@ cargo run --release --bin runtime-bench -- \
 The benchmark synchronizes the selected Candle device around timed sections, so
 CUDA timings include queued device work rather than just launch overhead.
 Current sections cover synthetic encode, dynamics where applicable,
-rollout or scoring, an end-to-end synthetic path, and TD-MPC2 planner latency
-for CEM, MPPI, and iCEM. Planner sections reuse a reset `TdMpc2Session`, so they
-measure the hot MPC loop after observation encoding has been cached.
+rollout or scoring, TD-MPC2 actor-mean policy rollout, an end-to-end synthetic
+path, and TD-MPC2 planner latency for CEM, MPPI, and iCEM. Planner sections
+reuse a reset `TdMpc2Session`, so they measure the hot MPC loop after
+observation encoding has been cached.
 
-Latest local planner validation after device-side CEM/iCEM elite selection,
-run on 2026-05-29:
+Latest local TD-MPC2 runtime validation after adding actor-mean policy rollout,
+run on 2026-06-01:
 
-- `cargo test --locked` passed.
+- `cargo test --locked -- --nocapture` passed.
 - `cargo check --locked --all-targets` passed.
 - CUDA smoke completed with
   `cargo run --locked --bin runtime-bench -- --model td-mpc2 --device cuda --warmup 0 --iters 1 --samples 4 --horizon 2 --planner-iterations 1`.
-  This debug smoke emitted `plan_cem`, `plan_mppi`, and `plan_icem` sections;
-  use the release benchmark commands above for latency baselines.
+  This debug smoke emitted `policy_rollout`, `plan_cem`, `plan_mppi`, and
+  `plan_icem` sections; use the release benchmark commands above for latency
+  baselines.
 
 ## Runtime Sessions
 
@@ -500,6 +503,8 @@ status = swm_nvdec_decoder_create_420(
 status = swm_tdmpc2_reset_state_pixels(
     rt, state_f32, pixels_f32, batch, state_dim, image_size, image_size,
     SWM_PIXEL_LAYOUT_NCHW);
+status = swm_tdmpc2_actor_mean_action(rt, action_out);
+status = swm_tdmpc2_rollout_actor_mean(rt, horizon, sequence_out, reward_out);
 status = swm_tdmpc2_plan_cem(rt, cem_cfg, action_out, sequence_out, best_cost_out);
 status = swm_tdmpc2_plan_icem(rt, icem_cfg, action_out, sequence_out, best_cost_out);
 swm_nvdec_decoder_free(nvdec);
@@ -533,9 +538,13 @@ goal with `swm_lewm_set_goal_pixels` or a CUDA media goal-history entrypoint
 before calling a LeWM planner entrypoint.
 
 Latest local C ABI validation after adding CUDA media handles, reset
-entrypoints, and NVDECODE capability/decoder lifecycle, run on 2026-06-01:
+entrypoints, NVDECODE capability/decoder lifecycle, and TD-MPC2 actor policy
+entrypoints, run on 2026-06-01:
 
 - `cargo check --locked --all-targets` passed.
+- `cargo test --locked ffi::tests::tdmpc2_actor_policy_c_abi_writes_outputs -- --nocapture` passed.
+- `cargo test --locked ffi_actor -- --nocapture` passed.
+- `cargo test --locked ffi_rollout_actor -- --nocapture` passed.
 - `cargo test --locked --test ffi -- --nocapture` passed.
 - `cargo test --locked ffi_nvdec -- --nocapture` passed.
 - `cargo build --locked --release --lib` produced the release library.
@@ -592,7 +601,7 @@ checkpoint plus config.
 - Add compact fixture integration tests once small public test weights are available.
 - Add NVDECODE parser callbacks and frame mapping that write decoded frames into
   Rust-owned CUDA NV12 buffers.
-- Add TD-MPC2 policy rollout sampling.
+- Add stochastic TD-MPC2 actor sampling with deterministic CUDA agreement tests.
 - Add planner buffer reuse/preallocation for lower steady-state allocation cost.
 - Add safetensors export guidance for deployments that prefer mmap loading.
 - Add C ABI overhead benchmarks for TD-MPC2 and LeWM deployment calls.

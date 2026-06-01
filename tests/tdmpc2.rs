@@ -35,6 +35,26 @@ fn forward_predicts_next_latent_and_reward_logits() -> candle::Result<()> {
 }
 
 #[test]
+fn rolls_out_actor_mean_policy() -> candle::Result<()> {
+    let device = Device::new_cuda(0)?;
+    let model = model(12, 4, &device)?;
+    let z = Tensor::randn(0f32, 1f32, (2, 128), &device)?;
+
+    let (actions, rewards, final_z) = model.rollout_actor_mean(&z, 3)?;
+
+    assert_eq!(actions.dims(), &[2, 3, 4]);
+    assert_eq!(rewards.dims(), &[2, 3, 1]);
+    assert_eq!(final_z.dims(), &[2, 128]);
+    for row in actions.flatten_all()?.to_vec1::<f32>()? {
+        assert!(row.is_finite());
+    }
+    for value in rewards.flatten_all()?.to_vec1::<f32>()? {
+        assert!(value.is_finite());
+    }
+    Ok(())
+}
+
+#[test]
 fn scores_action_candidates_from_state_batch() -> candle::Result<()> {
     let device = Device::new_cuda(0)?;
     let model = model(12, 4, &device)?;

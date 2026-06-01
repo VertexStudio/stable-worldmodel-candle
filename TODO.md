@@ -57,6 +57,8 @@ predictable and deployment practical.
 - `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
   and TD-MPC2 paths, including TD-MPC2 CEM/MPPI/iCEM planning latency.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
+- TD-MPC2 actor-mean policy rollout runs through Candle CUDA tensors and is
+  exposed through the Rust model API, session API, benchmark harness, and C ABI.
 - CEM exists as the first Rust-native planning solver. It keeps candidate
   generation, rollout/scoring, and elite selection in Candle tensors on the
   selected device.
@@ -363,8 +365,8 @@ Expose the stable runtime without forcing a Python service.
 - The crate builds both `rlib` and `cdylib`.
 - `ffi` exposes TD-MPC2 state/vector, pixel, and mixed state+pixel artifact
   loading, observation reset, dimension accessors, CEM planning, MPPI planning,
-  iCEM planning with persistent warm-start state, handle cleanup, and
-  thread-local error reporting.
+  iCEM planning with persistent warm-start state, actor mean action, actor-mean
+  policy rollout, handle cleanup, and thread-local error reporting.
 - `ffi` exposes LeWM artifact loading, image-history reset, goal pixel setup,
   CEM/MPPI/iCEM planning, handle cleanup, and thread-local error reporting.
 

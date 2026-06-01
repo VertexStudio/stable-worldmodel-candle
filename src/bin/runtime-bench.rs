@@ -274,6 +274,10 @@ fn bench_tdmpc2(
             model.get_cost_state(&state, &action_candidates)?;
             Ok(())
         })?,
+        bench("policy_rollout", args, device, || {
+            model.rollout_actor_mean(&z, args.horizon)?;
+            Ok(())
+        })?,
         bench("plan_cem", args, device, || {
             cem.plan(&session)?;
             Ok(())
