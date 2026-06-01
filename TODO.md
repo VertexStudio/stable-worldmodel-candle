@@ -38,6 +38,8 @@ predictable and deployment practical.
 - Rust preprocessing exists for decoded RGB frame stacks, latest-frame pixel
   tensors, normalized state arrays, and clamped action arrays; optional
   file/video decode support is still pending.
+- CUDA media preprocessing now has a device-resident path for packed U8
+  RGB/BGR/RGBA/BGRA image tensors into normalized F32 NCHW Candle tensors.
 - `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
   and TD-MPC2 paths, including TD-MPC2 CEM/MPPI/iCEM planning latency.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.

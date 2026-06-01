@@ -154,6 +154,26 @@ TD-MPC2 pixel inputs use the upstream CNN layout (`cnn.0`, `cnn.2`, `cnn.4`,
 `cnn.6`, then `pixel_encoder`) and accept either NCHW or NHWC tensors before
 SimNorm.
 
+## NVIDIA Media Runtime
+
+CUDA builds expose `cuda_media` for NVIDIA-first image ingestion. The current
+path owns a reusable model-ready Candle CUDA tensor and launches a fused CUDA
+kernel on Candle's CUDA stream:
+
+```text
+packed U8 RGB/BGR/RGBA/BGRA CUDA tensor
+  -> bilinear resize
+  -> channel reorder to RGB
+  -> /255
+  -> mean/std normalization
+  -> F32 NCHW Candle CUDA tensor
+```
+
+`CudaImagePreprocessor` is the first device-resident bridge for nvJPEG,
+nvImageCodec, NPP, and NVDEC work. It writes into a persistent output tensor
+that can be passed directly to LeWM or TD-MPC2 pixel paths without host
+readback.
+
 For backend parity, generate CPU and CUDA Python fixtures from identical CPU
 input tensors, then compare them before comparing Candle:
 
