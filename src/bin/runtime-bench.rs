@@ -347,6 +347,13 @@ fn bench_tdmpc2(
         device,
     )?
     .to_dtype(dtype)?;
+    let actor_noise = Tensor::randn(
+        0f32,
+        1f32,
+        (args.samples, args.batch_size, args.horizon, args.action_dim),
+        device,
+    )?
+    .to_dtype(dtype)?;
     let media_size = 64usize;
     let media_config = ImagePreprocess {
         output_height: media_size,
@@ -472,10 +479,14 @@ fn bench_tdmpc2(
         Ok(())
     })?);
     rows.push(bench("policy_rollout", args, device, || {
-        model.rollout_actor_mean(&z, args.horizon)?;
+        model.rollout_actor_mean_logits(&z, args.horizon)?;
         Ok(())
     })?);
-    rows.push(bench("policy_sample", args, device, || {
+    rows.push(bench("policy_sample_fixed", args, device, || {
+        model.rollout_actor_sampled_with_noise(&z, &actor_noise)?;
+        Ok(())
+    })?);
+    rows.push(bench("policy_sample_generated", args, device, || {
         model.rollout_actor_sampled(&z, args.horizon, args.samples)?;
         Ok(())
     })?);

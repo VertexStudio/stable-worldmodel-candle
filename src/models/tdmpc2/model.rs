@@ -144,9 +144,13 @@ impl TdMpc2 {
         Ok((mean_raw, log_std))
     }
 
+    pub fn actor_mean_raw(&self, z: &Tensor) -> Result<Tensor> {
+        let chunks = self.pi.forward(z)?.chunk(2, D::Minus1)?;
+        Ok(chunks[0].clone())
+    }
+
     pub fn actor_mean_action(&self, z: &Tensor) -> Result<Tensor> {
-        let (mean_raw, _) = self.actor_mean_log_std(z)?;
-        mean_raw.tanh()
+        self.actor_mean_raw(z)?.tanh()
     }
 
     pub fn actor_sample_action(&self, z: &Tensor, noise: &Tensor) -> Result<Tensor> {
@@ -170,29 +174,39 @@ impl TdMpc2 {
         z: &Tensor,
         horizon: usize,
     ) -> Result<(Tensor, Tensor, Tensor)> {
+        let (actions, reward_logits, z) = self.rollout_actor_mean_logits(z, horizon)?;
+        let rewards = two_hot_inv(
+            &reward_logits,
+            self.cfg.vmin,
+            self.cfg.vmax,
+            self.cfg.num_bins,
+        )?;
+        Ok((actions, rewards, z))
+    }
+
+    pub fn rollout_actor_mean_logits(
+        &self,
+        z: &Tensor,
+        horizon: usize,
+    ) -> Result<(Tensor, Tensor, Tensor)> {
         if horizon == 0 {
             candle::bail!("TD-MPC2 actor rollout horizon must be greater than zero");
         }
 
         let mut z = z.clone();
         let mut actions = Vec::with_capacity(horizon);
-        let mut rewards = Vec::with_capacity(horizon);
+        let mut reward_logits = Vec::with_capacity(horizon);
         for _ in 0..horizon {
             let action = self.actor_mean_action(&z)?;
             let z_a = cat_last(&[z.clone(), action.clone()])?;
-            let reward = two_hot_inv(
-                &self.reward.forward(&z_a)?,
-                self.cfg.vmin,
-                self.cfg.vmax,
-                self.cfg.num_bins,
-            )?;
+            let reward = self.reward.forward(&z_a)?;
             z = self.dynamics.forward(&z_a)?;
             actions.push(action);
-            rewards.push(reward);
+            reward_logits.push(reward);
         }
 
         let action_refs = actions.iter().collect::<Vec<_>>();
-        let reward_refs = rewards.iter().collect::<Vec<_>>();
+        let reward_refs = reward_logits.iter().collect::<Vec<_>>();
         Ok((
             Tensor::stack(&action_refs, 1)?,
             Tensor::stack(&reward_refs, 1)?,

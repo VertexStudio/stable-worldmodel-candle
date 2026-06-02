@@ -461,10 +461,10 @@ rows, run on 2026-06-01:
 - CUDA smoke completed with
   `cargo run --locked --bin runtime-bench -- --model td-mpc2 --device cuda --warmup 0 --iters 1 --samples 4 --horizon 2 --planner-iterations 1`.
   This debug smoke emitted `media_packed`, `media_nv12`, `policy_rollout`,
-  `policy_sample`, `ffi_actor_mean`, `ffi_policy_roll`, `ffi_policy_samp`,
-  `plan_cem`, `ffi_plan_cem`, `ffi_plan_mppi`, `ffi_plan_icem`, `plan_mppi`,
-  and `plan_icem` sections; use the release benchmark commands above for
-  latency baselines.
+  `policy_sample_fixed`, `policy_sample_generated`, `ffi_actor_mean`,
+  `ffi_policy_roll`, `ffi_policy_samp`, `plan_cem`, `ffi_plan_cem`,
+  `ffi_plan_mppi`, `ffi_plan_icem`, `plan_mppi`, and `plan_icem` sections; use
+  the release benchmark commands above for latency baselines.
 - LeWM CUDA smoke completed with
   `cargo run --locked --bin runtime-bench -- --model le-wm --device cuda --warmup 0 --iters 1 --samples 2 --horizon 3 --planner-iterations 1 --action-dim 2`.
   This debug smoke emitted `media_packed`, `media_nv12`, `ffi_plan_cem`,
@@ -480,7 +480,9 @@ nvJPEG into a Candle CUDA U8 RGB tensor, then runs the fused CUDA preprocessing
 kernel into the model tensor. The remaining rows compare official
 Python/PyTorch TD-MPC2 model sections against Rust/Candle: encode, dynamics,
 candidate scoring, full encode+dynamics+score, actor mean rollout, and sampled
-actor rollout.
+actor rollout. Actor mean rollout compares raw reward logits on both sides.
+Sampled actor rollout is split into fixed-noise parity and generated-noise
+deployment rows.
 
 Rust-only media rows are still reported by `runtime-bench`: `media_packed`
 measures CUDA-resident packed RGB preprocessing, and `media_nv12` measures
@@ -502,7 +504,9 @@ Latest local comparison, run on 2026-06-02 on an NVIDIA GeForce RTX 4090:
 - Metric in the graph: p50 latency over 50 timed iterations after 10 warmup
   iterations. Lower is faster; the right-side multiplier is Python p50 divided
   by Rust p50.
-- Encoded JPEG ingestion p50: Python `0.187 ms`, Rust `0.037 ms`, `5.11x`.
+- Encoded JPEG ingestion p50: Python `0.145 ms`, Rust `0.031 ms`, `4.61x`.
+- Actor rollout p50 after matching work: `policy_rollout` `1.10x`,
+  `policy_sample_fixed` `1.04x`, `policy_sample_generated` `1.05x`.
 - Rust-only hot media rows from the same release run: `media_packed`
   `0.007 ms`, `media_nv12` `0.007 ms`.
 

@@ -45,6 +45,10 @@ fn rolls_out_actor_mean_policy() -> candle::Result<()> {
     assert_eq!(actions.dims(), &[2, 3, 4]);
     assert_eq!(rewards.dims(), &[2, 3, 1]);
     assert_eq!(final_z.dims(), &[2, 128]);
+    let (raw_actions, reward_logits, raw_final_z) = model.rollout_actor_mean_logits(&z, 3)?;
+    assert_eq!(raw_actions.dims(), &[2, 3, 4]);
+    assert_eq!(reward_logits.dims(), &[2, 3, 101]);
+    assert_eq!(raw_final_z.dims(), &[2, 128]);
     for row in actions.flatten_all()?.to_vec1::<f32>()? {
         assert!(row.is_finite());
     }

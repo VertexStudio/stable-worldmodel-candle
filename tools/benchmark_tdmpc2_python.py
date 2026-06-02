@@ -147,9 +147,21 @@ def main() -> None:
             ),
             bench("policy_rollout", args, lambda: actor_mean_rollout(model, z, args.horizon)),
             bench(
-                "policy_sample",
+                "policy_sample_fixed",
                 args,
                 lambda: actor_sample_rollout(model, z, actor_noise, log_std),
+            ),
+            bench(
+                "policy_sample_generated",
+                args,
+                lambda: actor_sample_rollout_generated(
+                    model,
+                    z,
+                    actor_trajs,
+                    args.horizon,
+                    args.action_dim,
+                    log_std,
+                ),
             ),
         ]
 
@@ -256,6 +268,18 @@ def actor_sample_rollout(model, z, noise, log_std_fn):
         curr_z = model.dynamics(torch.cat([curr_z, action], dim=-1))
         actions.append(action.reshape(num_trajs, batch, action_dim))
     return torch.stack(actions, dim=2).mean(0)
+
+
+def actor_sample_rollout_generated(model, z, num_trajs, horizon, action_dim, log_std_fn):
+    noise = torch.randn(
+        num_trajs,
+        z.shape[0],
+        horizon,
+        action_dim,
+        dtype=z.dtype,
+        device=z.device,
+    )
+    return actor_sample_rollout(model, z, noise, log_std_fn)
 
 
 def bench(name: str, args: argparse.Namespace, op: Callable[[], object]) -> dict[str, float | str]:

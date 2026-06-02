@@ -16,7 +16,8 @@ DEFAULT_NAMES = [
     "score",
     "full",
     "policy_rollout",
-    "policy_sample",
+    "policy_sample_fixed",
+    "policy_sample_generated",
 ]
 
 
@@ -57,7 +58,7 @@ def load_stats(path: Path) -> dict[str, dict]:
 
 def render_svg(title: str, metric: str, rows: list[tuple[str, float, float, float]]) -> str:
     width = 1120
-    left = 180
+    left = 230
     right = 240
     top = 88
     row_h = 62
