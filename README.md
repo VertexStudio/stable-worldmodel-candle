@@ -197,23 +197,50 @@ cargo run --release --locked --features hub --bin lewm-plan-images -- \
   --samples 1024 \
   --iterations 5 \
   --seed 7 \
-  --output target/reports/lewm-pusht-plan.html
+  --output target/reports/lewm-pusht-rust-plan.html
+
+uv run --locked --no-dev \
+  python tools/benchmark_lewm_plan_images_python.py \
+  --model quentinll/lewm-pusht \
+  --current target/examples/current.jpg \
+  --goal target/examples/goal.jpg \
+  --planner icem \
+  --samples 1024 \
+  --iterations 5 \
+  --seed 7 \
+  --output target/reports/lewm-pusht-python-plan.json
 ```
 
 Latest real image-planning smoke, 2026-06-02 on an NVIDIA GeForce RTX 4090:
 
-- Output: `target/reports/lewm-pusht-plan.html` and
-  `target/reports/lewm-pusht-plan.json`.
+- Rust output: `target/reports/lewm-pusht-rust-plan.html` and
+  `target/reports/lewm-pusht-rust-plan.json`.
+- Python output: `target/reports/lewm-pusht-python-plan.json`.
 - Checkpoint: `quentinll/lewm-pusht`, Hugging Face snapshot
   `22b330c28c27ead4bfd1888615af1340e3fe9052`.
 - Setup: generated 224x224 JPEG current and goal images, history size `3`,
   horizon `5`, action dim `10`, iCEM samples `1024`, elites `256`,
   iterations `5`, seed `7`.
-- Planner result: selected cost `11.930494`, final candidate best
-  `11.930492`, final mean `15.119639`, p50 `14.196554`, p95 `20.818665`.
-- Timings: current JPEG decode/preprocess `18.651 ms`, goal JPEG
-  decode/preprocess `0.470 ms`, current encode `133.049 ms`, goal encode
-  `2.747 ms`, planning `215.742 ms`, selected-score pass `8.668 ms`.
+- Candidate RNG is backend-native: Rust uses cuRAND through Candle/cudarc,
+  Python uses PyTorch CUDA RNG. Compare workload latency and cost distribution;
+  identical first actions are not expected from this run.
+
+| Stage | Rust CUDA | Python CUDA | Python/Rust |
+| --- | ---: | ---: | ---: |
+| Current JPEG decode + preprocess | `15.923 ms` | `26.747 ms` | `1.68x` |
+| Goal JPEG decode + preprocess | `0.460 ms` | `1.699 ms` | `3.69x` |
+| Current LeWM encode | `122.177 ms` | `128.793 ms` | `1.05x` |
+| Goal LeWM encode | `2.745 ms` | `3.503 ms` | `1.28x` |
+| iCEM planning | `203.473 ms` | `238.083 ms` | `1.17x` |
+| Selected-score pass | `7.987 ms` | `9.796 ms` | `1.23x` |
+
+| Metric | Rust CUDA | Python CUDA |
+| --- | ---: | ---: |
+| Selected cost | `11.930494` | `11.865830` |
+| Final candidate best | `11.930492` | `11.865828` |
+| Final candidate mean | `15.119639` | `15.038874` |
+| Final candidate p50 | `14.196554` | `14.094571` |
+| Final candidate p95 | `20.818665` | `20.615538` |
 
 TD-MPC2 state/vector fixture export uses a deterministic Python model and saves
 both an `.npz` fixture and a `.pt` state dict:

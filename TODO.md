@@ -38,6 +38,8 @@ predictable and deployment practical.
 - `lewm-plan-images` runs a real LeWM checkpoint from JPEG current/goal images
   through nvJPEG, Candle CUDA preprocessing, LeWM encode/rollout/scoring, and a
   Rust planner, then emits HTML plus JSON.
+- `tools/benchmark_lewm_plan_images_python.py` compares the same real-image
+  LeWM planning workload against official Python/PyTorch inference.
 - Upstream `stable-worldmodel` support is tracked in
   `docs/upstream-stable-worldmodel.md`; current audited commit is
   `40dff37fc983c5276ada65eb1c7873cefbcccd8a`.
