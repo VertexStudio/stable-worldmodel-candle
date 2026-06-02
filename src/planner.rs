@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Mutex, MutexGuard,
+        Mutex, MutexGuard, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -8,7 +8,15 @@ use std::{
 
 use candle::{
     CudaStorage, DType, Device, DeviceLocation, IndexOp, Result, Storage, Tensor,
-    cuda_backend::cudarc, op::BackpropOp,
+    cuda_backend::{
+        WrapErr,
+        cudarc::{
+            self,
+            driver::{LaunchConfig, PushKernelArg},
+            nvrtc,
+        },
+    },
+    op::BackpropOp,
 };
 use candle_nn::ops;
 
@@ -1284,7 +1292,79 @@ fn lowest_score_indices(scores: &Tensor, count: usize) -> Result<Tensor> {
     if count > samples {
         candle::bail!("top-k count {count} cannot exceed samples {samples}");
     }
+    if let Some(indices) = cuda_lowest_score_indices(scores, count)? {
+        return Ok(indices);
+    }
     scores.arg_sort_last_dim(true)?.narrow(1, 0, count)
+}
+
+fn cuda_lowest_score_indices(scores: &Tensor, count: usize) -> Result<Option<Tensor>> {
+    if !scores.device().is_cuda() || scores.dtype() != DType::F32 {
+        return Ok(None);
+    }
+    let [batch, samples] = scores.dims() else {
+        candle::bail!("score tensor must have shape [batch, samples], got {:?}", scores.shape());
+    };
+    if *samples == 0 {
+        candle::bail!("score tensor must contain at least one sample");
+    }
+    if *samples > 4096 {
+        return Ok(None);
+    }
+
+    let scores = scores.contiguous()?;
+    let (storage, layout) = scores.storage_and_layout();
+    let Storage::Cuda(storage) = &*storage else {
+        return Ok(None);
+    };
+    let score_slice = storage.as_cuda_slice::<f32>()?;
+    let Some((start, end)) = layout.contiguous_offsets() else {
+        candle::bail!("score tensor must be contiguous for CUDA top-k");
+    };
+    let score_view = score_slice.slice(start..end);
+    let cuda = storage.device.clone();
+    let mut output = unsafe { cuda.alloc::<u32>(*batch * count)? };
+
+    let ptx = cached_planner_ptx(
+        &LOWEST_K_INDICES_PTX,
+        LOWEST_K_INDICES_CUDA,
+        "lowest-score-indices",
+    )?;
+    let func = cuda.get_or_load_custom_func(
+        "swm_lowest_k_indices_f32",
+        "swm_planner_lowest_k",
+        ptx,
+    )?;
+
+    let sort_len = (*samples).next_power_of_two();
+    let block_dim = sort_len.min(1024) as u32;
+    let shared_mem_bytes = (sort_len * (std::mem::size_of::<f32>() + std::mem::size_of::<u32>()))
+        .try_into()
+        .map_err(|_| candle::Error::Msg("planner top-k shared memory overflowed".to_string()))?;
+    let cfg = LaunchConfig {
+        grid_dim: (*batch as u32, 1, 1),
+        block_dim: (block_dim, 1, 1),
+        shared_mem_bytes,
+    };
+    let samples = *samples as u32;
+    let sort_len = sort_len as u32;
+    let count = count as u32;
+    let stream = cuda.cuda_stream();
+    let mut builder = stream.launch_builder(&func);
+    builder.arg(&score_view);
+    builder.arg(&mut output);
+    builder.arg(&samples);
+    builder.arg(&sort_len);
+    builder.arg(&count);
+    unsafe { builder.launch(cfg) }.w()?;
+
+    let storage = CudaStorage::wrap_cuda_slice(output, cuda);
+    Ok(Some(Tensor::from_storage(
+        Storage::Cuda(storage),
+        (*batch, count as usize),
+        BackpropOp::none(),
+        false,
+    )))
 }
 
 fn select_elites(candidates: &Tensor, scores: &Tensor, elite_count: usize) -> Result<Tensor> {
@@ -1325,6 +1405,89 @@ fn best_indices_from_tensor(indices: &Tensor) -> Result<Vec<usize>> {
     Ok(best_indices)
 }
 
+static LOWEST_K_INDICES_PTX: OnceLock<std::result::Result<String, String>> = OnceLock::new();
+
+fn cached_planner_ptx(
+    cache: &'static OnceLock<std::result::Result<String, String>>,
+    source: &'static str,
+    name: &'static str,
+) -> Result<&'static str> {
+    let cached = cache.get_or_init(|| {
+        nvrtc::safe::compile_ptx_with_opts(
+            source,
+            nvrtc::CompileOptions {
+                use_fast_math: Some(true),
+                ..Default::default()
+            },
+        )
+        .map(|ptx| ptx.to_src())
+        .map_err(|err| err.to_string())
+    });
+    match cached {
+        Ok(ptx) => Ok(ptx.as_str()),
+        Err(err) => candle::bail!("{name} NVRTC compile failed: {err}"),
+    }
+}
+
+const LOWEST_K_INDICES_CUDA: &str = r#"
+extern "C" __global__ void swm_lowest_k_indices_f32(
+    const float* __restrict__ scores,
+    unsigned int* __restrict__ output,
+    unsigned int samples,
+    unsigned int sort_len,
+    unsigned int count
+) {
+    extern __shared__ unsigned char shared[];
+    float* values = reinterpret_cast<float*>(shared);
+    unsigned int* indices = reinterpret_cast<unsigned int*>(values + sort_len);
+    const unsigned int batch = blockIdx.x;
+    const unsigned int tid = threadIdx.x;
+    const float* row = scores + static_cast<unsigned long long>(batch) * samples;
+
+    for (unsigned int i = tid; i < sort_len; i += blockDim.x) {
+        if (i < samples) {
+            float value = row[i];
+            values[i] = (value == value) ? value : __int_as_float(0x7f800000);
+            indices[i] = i;
+        } else {
+            values[i] = __int_as_float(0x7f800000);
+            indices[i] = i;
+        }
+    }
+    __syncthreads();
+
+    for (unsigned int width = 2; width <= sort_len; width <<= 1) {
+        for (unsigned int stride = width >> 1; stride > 0; stride >>= 1) {
+            for (unsigned int i = tid; i < sort_len; i += blockDim.x) {
+                const unsigned int peer = i ^ stride;
+                if (peer > i && peer < sort_len) {
+                    const bool ascending = (i & width) == 0;
+                    const float a_value = values[i];
+                    const float b_value = values[peer];
+                    const unsigned int a_index = indices[i];
+                    const unsigned int b_index = indices[peer];
+                    const bool b_before_a =
+                        (b_value < a_value) || (b_value == a_value && b_index < a_index);
+                    const bool a_before_b =
+                        (a_value < b_value) || (a_value == b_value && a_index < b_index);
+                    if ((ascending && b_before_a) || (!ascending && a_before_b)) {
+                        values[i] = b_value;
+                        values[peer] = a_value;
+                        indices[i] = b_index;
+                        indices[peer] = a_index;
+                    }
+                }
+            }
+            __syncthreads();
+        }
+    }
+
+    for (unsigned int i = tid; i < count; i += blockDim.x) {
+        output[static_cast<unsigned long long>(batch) * count + i] = indices[i];
+    }
+}
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1359,6 +1522,19 @@ mod tests {
             indices.to_vec2::<u32>()?,
             &[[3, 1, 0], [3, 1, 2]]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn lowest_score_indices_covers_benchmark_sample_count() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let scores = (0..1024)
+            .map(|idx| (1024 - idx) as f32)
+            .collect::<Vec<_>>();
+        let scores = Tensor::from_vec(scores, (1, 1024), &device)?;
+        let indices = lowest_score_indices(&scores, 4)?;
+
+        assert_eq!(indices.to_vec2::<u32>()?, &[[1023, 1022, 1021, 1020]]);
         Ok(())
     }
 
