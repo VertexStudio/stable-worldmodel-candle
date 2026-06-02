@@ -211,6 +211,8 @@ uv run --locked --no-dev \
   --output target/reports/lewm-pusht-python-plan.json
 ```
 
+![LeWM real-image Python vs Rust CUDA planning benchmark](docs/lewm-image-plan-python-rust-benchmark.svg)
+
 Latest real image-planning smoke, 2026-06-02 on an NVIDIA GeForce RTX 4090:
 
 - Rust output: `target/reports/lewm-pusht-rust-plan.html` and
@@ -241,6 +243,16 @@ Latest real image-planning smoke, 2026-06-02 on an NVIDIA GeForce RTX 4090:
 | Final candidate mean | `15.119639` | `15.038874` |
 | Final candidate p50 | `14.196554` | `14.094571` |
 | Final candidate p95 | `20.818665` | `20.615538` |
+
+Regenerate the LeWM image-planning graph:
+
+```bash
+uv run --locked --no-dev \
+  python tools/plot_lewm_image_plan_comparison.py \
+  --python target/reports/lewm-pusht-python-plan.json \
+  --rust target/reports/lewm-pusht-rust-plan.json \
+  --output docs/lewm-image-plan-python-rust-benchmark.svg
+```
 
 TD-MPC2 state/vector fixture export uses a deterministic Python model and saves
 both an `.npz` fixture and a `.pt` state dict:
@@ -584,6 +596,12 @@ rows, run on 2026-06-01:
   `ffi_plan_mppi`, and `ffi_plan_icem` sections.
 
 ## Python Vs Rust Benchmark
+
+The LeWM real-image planning benchmark compares the complete checkpoint path
+for current/goal JPEGs: image decode/preprocess, current and goal encoding,
+Rust/Python planner loop, and selected-sequence scoring.
+
+![LeWM real-image Python vs Rust CUDA planning benchmark](docs/lewm-image-plan-python-rust-benchmark.svg)
 
 The direct Python-vs-Rust timing comparison tracks TD-MPC2 CUDA runtime work
 that both stacks can execute. The first row is encoded image ingestion:
