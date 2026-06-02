@@ -31,7 +31,7 @@ is to add a focused Candle CUDA op, bind the NVIDIA library directly, or use a
 CUDA-compatible crate that preserves device residency. Broad-platform
 compatibility is not a reason to keep slower runtime paths in this crate.
 
-## Current Scope
+## Capabilities
 
 - Linux/NVIDIA CUDA with cuDNN is the required runtime target. cuDNN is part of
   the default feature stack, and non-CUDA/non-cuDNN/non-Linux builds are
@@ -56,11 +56,11 @@ compatibility is not a reason to keep slower runtime paths in this crate.
   Hub checkpoint download behind `--features hub`.
 - Validation tooling: repo-local `uv` environment using the official
   `stable-worldmodel[train]` package, deterministic CUDA fixture exporters,
-  LeWM and TD-MPC2 parity comparators, real LeWM fixture planning, cost argmin
-  checks, and runtime benchmarks.
+  LeWM and TD-MPC2 parity comparators, checkpoint-backed LeWM fixture planning,
+  cost argmin checks, and runtime benchmarks.
 - Upstream support tracking: the audited `stable-worldmodel` commit is recorded
   in [docs/upstream-stable-worldmodel.md](docs/upstream-stable-worldmodel.md).
-- CUDA smoke-test CLIs:
+- CUDA inspection CLIs:
 
 ```bash
 cargo run --bin lewm-inspect -- --action-dim 2
@@ -84,16 +84,15 @@ config.json
 weights.pt
 ```
 
-Official LeWM mirrors currently use this layout, for example
-`quentinll/lewm-pusht`, `quentinll/lewm-reacher`, and
-`quentinll/lewm-tworooms`.
+Official LeWM mirrors use this layout, for example `quentinll/lewm-pusht`,
+`quentinll/lewm-reacher`, and `quentinll/lewm-tworooms`.
 
 This repo includes `.python-version`, `pyproject.toml`, and `uv.lock` for parity
 tooling. `.python-version` selects Python 3.12 for `uv`; `pyproject.toml`
 declares the allowed Python range and dependencies. The Python environment
 depends on the official `stable-worldmodel[train]` package and pins
-`transformers<5` for the current public LeWM checkpoints, whose weights use the
-Hugging Face ViT 4.x key layout (`encoder.encoder.layer.*`).
+`transformers<5` for public LeWM checkpoints that use the Hugging Face ViT 4.x
+key layout (`encoder.encoder.layer.*`).
 
 To export a deterministic Python fixture from the official implementation:
 
@@ -127,10 +126,10 @@ cargo run --features hub --bin lewm-compare-fixture -- \
   --hf-repo quentinll/lewm-pusht
 ```
 
-The current verified PushT fixture covers pixel encoding, action embedding,
-single-step prediction, latent rollout, and goal cost.
+The PushT fixture covers pixel encoding, action embedding, single-step
+prediction, latent rollout, and goal cost.
 
-Real-checkpoint LeWM planning can be run against the same fixture and public
+Checkpoint-backed LeWM planning can be run against the same fixture and public
 checkpoint:
 
 ```bash
@@ -138,34 +137,34 @@ uv run --locked --no-dev \
   python tools/export_lewm_fixture.py \
   --model quentinll/lewm-pusht \
   --device cuda \
-  --output target/lewm-pusht-real-python-cuda.npz
+  --output target/lewm-pusht-checkpoint-python-cuda.npz
 
 cargo run --release --locked --features hub --bin lewm-compare-fixture -- \
   --device cuda \
-  --fixture target/lewm-pusht-real-python-cuda.npz \
+  --fixture target/lewm-pusht-checkpoint-python-cuda.npz \
   --hf-repo quentinll/lewm-pusht
 
 cargo run --release --locked --features hub --bin lewm-plan-fixture -- \
   --device cuda \
-  --fixture target/lewm-pusht-real-python-cuda.npz \
+  --fixture target/lewm-pusht-checkpoint-python-cuda.npz \
   --hf-repo quentinll/lewm-pusht \
   --samples 128 \
   --iterations 3 \
   --seed 7 \
-  --json > target/bench/lewm-pusht-real-plan-cuda.json
+  --json > target/bench/lewm-pusht-plan-cuda.json
 ```
 
-Latest real PushT checkpoint run, 2026-06-02 on an NVIDIA GeForce RTX 4090:
+Validation snapshot (2026-06-02, LeWM PushT checkpoint, RTX 4090):
 
 - Python fixture: official `stable_worldmodel`, PyTorch `2.12.0+cu130`, CUDA
   `13.0`, checkpoint `quentinll/lewm-pusht`.
-- Candle CUDA parity against the fresh Python CUDA fixture:
+- Candle CUDA parity against the Python CUDA fixture:
   `emb=5.731881e-4`, `act_emb=4.768372e-7`, `pred=7.328391e-4`,
   `rollout=6.533712e-4`, `cost=5.619049e-3`; cost argmin was stable.
 - Planner setup: horizon `5`, samples `128`, elites `32`, iterations `3`,
   action dim `10`, seed `7`, fixture candidate baseline best cost
   `14.485378`.
-- Real Rust planner results against the PushT goal embedding:
+- Rust planner results against the PushT goal embedding:
 
 | Planner | Best cost | Improvement vs fixture baseline | Elapsed |
 | --- | ---: | ---: | ---: |
@@ -173,15 +172,15 @@ Latest real PushT checkpoint run, 2026-06-02 on an NVIDIA GeForce RTX 4090:
 | MPPI | `10.074890` | `4.410488` | `24.726 ms` |
 | iCEM | `9.702090` | `4.783288` | `25.457 ms` |
 
-Real PushT LeWM planning uses the actual `swm/PushT-v1` environment, the
-public `quentinll/lewm-pusht` checkpoint, and real frames from
+The PushT environment demo uses `swm/PushT-v1`, the public
+`quentinll/lewm-pusht` checkpoint, and frames from
 `~/.stable_worldmodel/pusht_expert_train.h5`. The H5 stores pixels with the
 Blosc filter, so the Python tooling includes `hdf5plugin`.
 
 ```bash
 uv run --locked --no-dev \
   python tools/run_pusht_lewm_rust_demo.py \
-  --output-dir target/reports/pusht-real-demo \
+  --output-dir target/reports/pusht-demo \
   --hf-repo quentinll/lewm-pusht \
   --planner icem \
   --samples 1024 \
@@ -196,49 +195,49 @@ uv run --locked --no-dev \
 
 cargo run --release --locked --features hub --bin lewm-plan-images -- \
   --hf-repo quentinll/lewm-pusht \
-  --current target/reports/pusht-real-demo/input/dataset-current.jpg \
-  --goal target/reports/pusht-real-demo/input/dataset-goal.jpg \
+  --current target/reports/pusht-demo/input/dataset-current.jpg \
+  --goal target/reports/pusht-demo/input/dataset-goal.jpg \
   --planner icem \
   --samples 1024 \
   --iterations 5 \
   --horizon 5 \
   --history-size 1 \
   --seed 7 \
-  --output target/reports/pusht-real-demo/lewm-pusht-rust-plan-r00.html
+  --output target/reports/pusht-demo/lewm-pusht-rust-plan-r00.html
 
 uv run --locked --no-dev \
   python tools/benchmark_lewm_plan_images_python.py \
   --model quentinll/lewm-pusht \
-  --current target/reports/pusht-real-demo/input/dataset-current.jpg \
-  --goal target/reports/pusht-real-demo/input/dataset-goal.jpg \
+  --current target/reports/pusht-demo/input/dataset-current.jpg \
+  --goal target/reports/pusht-demo/input/dataset-goal.jpg \
   --planner icem \
   --samples 1024 \
   --iterations 5 \
   --horizon 5 \
   --history-size 1 \
   --seed 7 \
-  --output target/reports/pusht-real-demo/lewm-pusht-python-plan-r00.json
+  --output target/reports/pusht-demo/lewm-pusht-python-plan-r00.json
 ```
 
-![LeWM real-image Python vs Rust CUDA planning benchmark](docs/lewm-image-plan-python-rust-benchmark.svg)
+![LeWM PushT image Python vs Rust CUDA planning benchmark](docs/lewm-image-plan-python-rust-benchmark.svg)
 
-Latest real PushT planning run, 2026-06-02 on an NVIDIA GeForce RTX 4090:
+Validation snapshot (2026-06-02, PushT environment demo, RTX 4090):
 
-- Demo output: `target/reports/pusht-real-demo/pusht-demo.html`,
-  `target/reports/pusht-real-demo/pusht-demo.json`, and
-  `target/reports/pusht-real-demo/rollout/rollout.gif`.
+- Demo output: `target/reports/pusht-demo/pusht-demo.html`,
+  `target/reports/pusht-demo/pusht-demo.json`, and
+  `target/reports/pusht-demo/rollout/rollout.gif`.
 - Rust planner outputs:
-  `target/reports/pusht-real-demo/lewm-pusht-rust-plan-r00.json` and
-  `target/reports/pusht-real-demo/lewm-pusht-rust-plan-r01.json`.
+  `target/reports/pusht-demo/lewm-pusht-rust-plan-r00.json` and
+  `target/reports/pusht-demo/lewm-pusht-rust-plan-r01.json`.
 - Python comparison output:
-  `target/reports/pusht-real-demo/lewm-pusht-python-plan-r00.json`.
+  `target/reports/pusht-demo/lewm-pusht-python-plan-r00.json`.
 - Checkpoint: `quentinll/lewm-pusht`, Hugging Face snapshot
   `22b330c28c27ead4bfd1888615af1340e3fe9052`.
 - Dataset sample: row `209214`, episode `1694`, start step `63`, goal row
   `209239`, goal offset `25`.
-- Setup: real PushT H5 current/goal images, history size `1`, checkpoint
-  history size `3`, horizon `5`, action dim `10`, iCEM samples `1024`,
-  elites `256`, iterations `5`, planner seed `7`.
+- Setup: PushT H5 current/goal images, history size `1`, checkpoint history
+  size `3`, horizon `5`, action dim `10`, iCEM samples `1024`, elites `256`,
+  iterations `5`, planner seed `7`.
 - Rust env demo: two replans, `47` executed env actions, success `true`,
   final distance `28.178723`, planner costs `95.319412 -> 33.028206`,
   total planner time `513.175 ms`.
@@ -268,8 +267,8 @@ Regenerate the LeWM image-planning graph:
 ```bash
 uv run --locked --no-dev \
   python tools/plot_lewm_image_plan_comparison.py \
-  --python target/reports/pusht-real-demo/lewm-pusht-python-plan-r00.json \
-  --rust target/reports/pusht-real-demo/lewm-pusht-rust-plan-r00.json \
+  --python target/reports/pusht-demo/lewm-pusht-python-plan-r00.json \
+  --rust target/reports/pusht-demo/lewm-pusht-rust-plan-r00.json \
   --output docs/lewm-image-plan-python-rust-benchmark.svg \
   --title "LeWM PushT Image Planning Latency"
 ```
@@ -311,12 +310,12 @@ cargo run --bin tdmpc2-compare-fixture -- \
 Use `--fixture-kind both` on both commands to validate combined pixel+state
 encoding.
 
-Self-contained Python tooling validation, run on 2026-06-01:
+Validation snapshot (2026-06-01, Python tooling):
 
 - `uv lock --locked` passed with `stable-worldmodel[train]` from PyPI.
 - `uv run --locked --no-dev python ...` imported
   `stable_worldmodel` from this repo's `.venv`.
-- `tools/export_tdmpc2_fixture.py` generated a CUDA state fixture using only this
+- `tools/export_tdmpc2_fixture.py` exported a CUDA state fixture using only this
   repo's locked Python environment.
 - `cargo run --locked --bin tdmpc2-compare-fixture -- --fixture
   target/tdmpc2-self-contained-python-cuda.npz --weights
@@ -355,7 +354,7 @@ If the checkpoint keys are wrapped, pass `--strip-prefix model.` or another
 exact prefix as needed. The converter accepts raw tensor-only state dicts and
 checkpoints containing a tensor-only `state_dict`.
 
-Latest local safetensors conversion validation, run on 2026-06-01:
+Validation snapshot (2026-06-01, safetensors conversion):
 
 - `tools/convert_state_dict_safetensors.py` converted the TD-MPC2 sampled actor
   fixture weights into `target/tdmpc2-state-sampled-model.safetensors`.
@@ -364,11 +363,11 @@ Latest local safetensors conversion validation, run on 2026-06-01:
 
 Core preprocessing supports already-decoded RGB frame buffers and state/action
 arrays. RGB frames can be resized, normalized, stacked as `[batch, time,
-channels, height, width]`, converted to the latest `[batch, channels, height,
-width]` frame for pixel models, and moved to the selected Candle device. State
-vectors can be mean/std normalized, and actions can be clamped to configured
-bounds. CUDA media ingestion adds the NVIDIA path for encoded image bytes and
-CUDA-resident packed frame tensors.
+channels, height, width]`, reduced to `[batch, channels, height, width]` for
+pixel models, and moved to the selected Candle device. State vectors can be
+mean/std normalized, and actions can be clamped to configured bounds. CUDA
+media ingestion adds the NVIDIA path for encoded image bytes and CUDA-resident
+packed frame tensors.
 TD-MPC2 pixel inputs use the upstream CNN layout (`cnn.0`, `cnn.2`, `cnn.4`,
 `cnn.6`, then `pixel_encoder`) and accept either NCHW or NHWC tensors before
 SimNorm.
@@ -455,17 +454,17 @@ cargo check --all-targets
 cargo test media -- --nocapture
 ```
 
-For a real H.264 Annex B parser/map/copy smoke, generate a one-frame stream
-with GStreamer and point the opt-in test at it:
+For H.264 Annex B parser/map/copy validation, generate a one-frame stream with
+GStreamer and point the opt-in test at it:
 
 ```bash
-mkdir -p target/nvdec-smoke
+mkdir -p target/nvdec-validation
 gst-launch-1.0 -q videotestsrc num-buffers=1 pattern=black \
   ! 'video/x-raw,width=64,height=64,framerate=1/1' \
   ! x264enc tune=zerolatency speed-preset=ultrafast byte-stream=true key-int-max=1 \
-  ! filesink location=target/nvdec-smoke/black64.h264
+  ! filesink location=target/nvdec-validation/black64.h264
 
-SWM_NVDEC_TEST_PACKET=target/nvdec-smoke/black64.h264 \
+SWM_NVDEC_TEST_PACKET=target/nvdec-validation/black64.h264 \
   cargo test --locked decodes_annexb_packet_from_env_to_nv12_on_cuda -- --nocapture
 ```
 
@@ -474,11 +473,11 @@ Set `CUDA_HOME` or `CUDA_PATH` when CUDA is installed outside the standard
 `NVIDIA_VIDEO_CODEC_SDK_PATH` when `libnvcuvid.so` is installed outside the
 standard linker paths.
 
-Latest local NVDECODE capability validation, run on 2026-06-01:
+Validation snapshot (2026-06-01, NVDECODE):
 
 - `cargo test --locked media::nvdec -- --nocapture` passed.
 - `cargo test --locked ffi_nvdec -- --nocapture` passed.
-- `SWM_NVDEC_TEST_PACKET=target/nvdec-smoke/black64.h264 cargo test --locked decodes_annexb_packet_from_env_to_nv12_on_cuda -- --nocapture` passed after generating the packet with the GStreamer command above.
+- `SWM_NVDEC_TEST_PACKET=target/nvdec-validation/black64.h264 cargo test --locked decodes_annexb_packet_from_env_to_nv12_on_cuda -- --nocapture` passed with the GStreamer packet above.
 - H.264 8-bit 4:2:0 caps on `cuda:0`: supported, 1 NVDEC, NV12 output,
   min `48x16`, max `4096x4096`, histogram support enabled with 256 bins.
 - H.264 64x64 NV12 decoder create/destroy and parser-session create/destroy
@@ -519,7 +518,7 @@ CUDA/cuDNN is the default runtime:
 cargo check --all-targets
 ```
 
-Run a CUDA smoke:
+Run CUDA inspection:
 
 ```bash
 cargo run --release --bin lewm-inspect -- \
@@ -544,7 +543,7 @@ Default parity tolerances are per-output: `act_emb=1e-5`, `emb=1e-3`,
 `pred=1e-3`, `rollout=2e-3`, and `cost=1e-2`. The Python and Rust comparators
 also reject NaNs/Infs and require cost argmin/top-candidate stability.
 
-Latest local CUDA parity result, run on 2026-05-29:
+Validation snapshot (2026-05-29, LeWM CUDA parity):
 
 - Host: NVIDIA GeForce RTX 4090, driver `580.159.03`, `nvidia-smi` CUDA
   `13.0`, `nvcc 13.0.88`.
@@ -556,7 +555,7 @@ Latest local CUDA parity result, run on 2026-05-29:
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | Candle CUDA vs Python CUDA | `2.174266e-04` | `4.768372e-07` | `4.823357e-04` | `6.892309e-04` | `4.647255e-03` | stable |
 
-Latest local TD-MPC2 pixel parity result, run on 2026-05-29:
+Validation snapshot (2026-05-29, TD-MPC2 pixel parity):
 
 - Candle CUDA vs Python CUDA pixel fixture: `z=2.235174e-08`,
   `next_z=1.490116e-07`, `actor_mean=2.682209e-07`, `cost=0`, cost argmin
@@ -565,7 +564,7 @@ Latest local TD-MPC2 pixel parity result, run on 2026-05-29:
   `z=1.788139e-07`, `next_z=1.788139e-07`, `actor_mean=1.024455e-07`,
   `cost=0`, cost argmin stable.
 
-Latest local TD-MPC2 sampled actor parity result, run on 2026-06-01:
+Validation snapshot (2026-06-01, TD-MPC2 sampled actor parity):
 
 - `tools/export_tdmpc2_fixture.py` exported a CUDA state fixture with
   `--actor-trajs 4`.
@@ -589,39 +588,38 @@ cargo run --release --bin runtime-bench -- \
 
 The benchmark synchronizes the selected Candle device around timed sections, so
 CUDA timings include queued device work rather than just launch overhead.
-Current sections cover synthetic encode, dynamics where applicable,
-rollout or scoring, packed U8 and NV12 CUDA media preprocessing, TD-MPC2
-actor-mean and sampled policy rollouts, an end-to-end synthetic path, C ABI
-call rows, and planner latency for CEM, MPPI, and iCEM. Planner sections reuse
-reset sessions, so they measure the hot MPC loop after observation encoding has
-been cached. LeWM media rows preprocess `batch * history` 224x224 frames;
-TD-MPC2 media rows preprocess 64x64 batch frames.
+The synthetic benchmark covers encode, dynamics where applicable, rollout or
+scoring, packed U8 and NV12 CUDA media preprocessing, TD-MPC2 actor-mean and
+sampled policy rollouts, an end-to-end synthetic path, C ABI call rows, and
+planner latency for CEM, MPPI, and iCEM. Planner sections reuse reset sessions,
+so they measure the hot MPC loop after observation encoding has been cached.
+LeWM media rows preprocess `batch * history` 224x224 frames; TD-MPC2 media
+rows preprocess 64x64 batch frames.
 
-Latest local runtime validation after adding CUDA media preprocessing benchmark
-rows, run on 2026-06-01:
+Validation snapshot (2026-06-01, runtime benchmark harness):
 
 - `cargo check --locked --bin runtime-bench` passed.
 - `cargo test --locked -- --nocapture` passed.
 - `cargo check --locked --all-targets` passed.
-- CUDA smoke completed with
+- Debug CUDA runtime-bench run completed with
   `cargo run --locked --bin runtime-bench -- --model td-mpc2 --device cuda --warmup 0 --iters 1 --samples 4 --horizon 2 --planner-iterations 1`.
-  This debug smoke emitted `media_packed`, `media_nv12`, `policy_rollout`,
+  Emitted rows: `media_packed`, `media_nv12`, `policy_rollout`,
   `policy_sample_fixed`, `policy_sample_generated`, `ffi_actor_mean`,
   `ffi_policy_roll`, `ffi_policy_samp`, `plan_cem`, `ffi_plan_cem`,
   `ffi_plan_mppi`, `ffi_plan_icem`, `plan_mppi`, and `plan_icem` sections; use
   the release benchmark commands above for latency baselines.
-- LeWM CUDA smoke completed with
+- LeWM CUDA runtime-bench run completed with
   `cargo run --locked --bin runtime-bench -- --model le-wm --device cuda --warmup 0 --iters 1 --samples 2 --horizon 3 --planner-iterations 1 --action-dim 2`.
-  This debug smoke emitted `media_packed`, `media_nv12`, `ffi_plan_cem`,
-  `ffi_plan_mppi`, and `ffi_plan_icem` sections.
+  Emitted rows: `media_packed`, `media_nv12`, `ffi_plan_cem`,
+  `ffi_plan_mppi`, and `ffi_plan_icem`.
 
-## Python Vs Rust Benchmark
+## Python vs Rust Benchmarks
 
-The LeWM real-image planning benchmark compares the complete checkpoint path
+The LeWM PushT image-planning benchmark compares the complete checkpoint path
 for current/goal JPEGs: image decode/preprocess, current and goal encoding,
 Rust/Python planner loop, and selected-sequence scoring.
 
-![LeWM real-image Python vs Rust CUDA planning benchmark](docs/lewm-image-plan-python-rust-benchmark.svg)
+![LeWM PushT image Python vs Rust CUDA planning benchmark](docs/lewm-image-plan-python-rust-benchmark.svg)
 
 The direct Python-vs-Rust timing comparison tracks TD-MPC2 CUDA runtime work
 that both stacks can execute. The first row is encoded image ingestion:
@@ -635,16 +633,15 @@ actor rollout. Actor mean rollout compares raw reward logits on both sides.
 Sampled actor rollout is split into fixed-noise parity and generated-noise
 deployment rows.
 
-Rust-only media rows are still reported by `runtime-bench`: `media_packed`
-measures CUDA-resident packed RGB preprocessing, and `media_nv12` measures
-CUDA-resident NV12 colorspace/resize/normalization preprocessing for video
-surfaces. Rust-native planners are reported by `runtime-bench` as separate
-deployment rows because Python planner comparison is a separate benchmark
-surface.
+`runtime-bench` also reports Rust-only media rows: `media_packed` measures
+CUDA-resident packed RGB preprocessing, and `media_nv12` measures CUDA-resident
+NV12 colorspace/resize/normalization preprocessing for video surfaces.
+Rust-native planners are reported as deployment rows because Python planner
+comparison is a separate benchmark surface.
 
 ![TD-MPC2 Python vs Rust CUDA inference benchmark](docs/tdmpc2-python-rust-benchmark.svg)
 
-Latest local comparison, run on 2026-06-02 on an NVIDIA GeForce RTX 4090:
+Validation snapshot (2026-06-02, Python vs Rust CUDA benchmarks, RTX 4090):
 
 - Shape: 64x64 JPEG image, batch `1`, state dim `12`, action dim `10`,
   samples `64`, horizon `5`.
@@ -754,8 +751,7 @@ planners replay exactly from the same seed, persistent planners advance across
 control steps, and `reset_rng_sequence()` returns the planner to offset zero.
 Leave `seed` unset for continuous device RNG sampling in deployment.
 
-Latest local planner deadline and seeded-sampling validation, run on
-2026-06-01:
+Validation snapshot (2026-06-01, planner deadline and seeded sampling):
 
 - `cargo test --locked` passed.
 - `cargo check --locked --all-targets` passed.
@@ -847,10 +843,7 @@ history tensors; `swm_lewm_reset_cuda_image_history` and
 goal with `swm_lewm_set_goal_pixels` or a CUDA media goal-history entrypoint
 before calling a LeWM planner entrypoint.
 
-Latest local C ABI validation after adding CUDA media handle preprocessor
-caches, public NVDEC parser-session declarations, NVDECODE capability, decoder
-and parser lifecycle, and TD-MPC2 actor policy entrypoints including sampled
-actor rollout, run on 2026-06-01:
+Validation snapshot (2026-06-01, C ABI):
 
 - `cargo check --locked --all-targets` passed.
 - `cargo test --locked ffi::tests::tdmpc2_cuda_media_preprocessors_reuse_outputs -- --nocapture` passed.
@@ -876,7 +869,7 @@ src/
 ├── ffi.rs               # C ABI entrypoints
 ├── planner.rs           # Rust planning solvers
 └── bin/
-    └── lewm-inspect.rs  # LeWM smoke-test CLI
+    └── lewm-inspect.rs  # LeWM inspection CLI
     └── tdmpc2-inspect.rs
 ```
 

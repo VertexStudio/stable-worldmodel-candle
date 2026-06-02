@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a real PushT scene through the Rust LeWM planner and execute it."""
+"""Run a PushT scene through the Rust LeWM planner and execute it."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     default_pusht_h5 = Path.home() / ".stable_worldmodel" / "pusht_expert_train.h5"
-    parser.add_argument("--output-dir", type=Path, default=Path("target/reports/pusht-real-demo"))
+    parser.add_argument("--output-dir", type=Path, default=Path("target/reports/pusht-demo"))
     parser.add_argument("--hf-repo", default="quentinll/lewm-pusht")
     parser.add_argument("--planner", choices=("cem", "mppi", "icem"), default="icem")
     parser.add_argument("--samples", type=int, default=1024)
@@ -447,7 +447,7 @@ code {{ color: #dbe4ef; }}
 <body>
 <main>
 <h1>PushT LeWM Rust Demo</h1>
-<p>Real <code>swm/PushT-v1</code> frames, real <code>{payload["hf_repo"]}</code> checkpoint, Rust/Candle CUDA planner, then selected actions executed in PushT.</p>
+<p><code>swm/PushT-v1</code> frames, <code>{payload["hf_repo"]}</code> checkpoint, Rust/Candle CUDA planner, then selected actions executed in PushT.</p>
 <section class="grid">
 <div class="panel"><h2>Initial Current History</h2><div class="history">{current_images}</div></div>
 <div class="panel"><h2>Goal</h2><img src="{rel(payload["goal_image"])}" alt="goal"></div>
@@ -459,7 +459,7 @@ code {{ color: #dbe4ef; }}
 <h2>Planner</h2>
 <p>Dataset row: <code>{payload["dataset"]["row"]}</code>. Episode: <code>{payload["dataset"]["episode"]}</code>. Start step: <code>{payload["dataset"]["step"]}</code>. Goal offset: <code>{payload["dataset"]["goal_offset_steps"]}</code>.</p>
 <p>Success: <code>{payload["success"]}</code>. Final distance: <code>{payload["final_distance"]:.6f}</code>. Last selected cost: <code>{payload["selected_cost"]:.6f}</code>. Total planning time: <code>{payload["planning_ms"]:.3f} ms</code>. Replans: <code>{payload["replans_completed"]}</code>. Executed actions: <code>{len(payload["executed_actions"])}</code>.</p>
-<p><a href="{Path(payload["planner_runs"][-1]["report"]).name}">Open latest planner report</a></p>
+<p><a href="{Path(payload["planner_runs"][-1]["report"]).name}">Open final planner report</a></p>
 </div>
 </section>
 </main>

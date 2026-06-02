@@ -28,51 +28,52 @@ predictable and deployment practical.
   - `add cem planner`
   - `add c abi runtime entrypoints`
 
-## Current State
+## Implemented Capabilities
 
 - LeWM image-model implementation exists.
 - LeWM Python/Candle CUDA parity exists through `tools/cuda_parity.sh`.
-- `lewm-plan-fixture` runs CEM/MPPI/iCEM against real LeWM fixture inputs and
-  public checkpoints; the latest PushT run improves over the fixture candidate
-  baseline with all three solvers.
-- `lewm-plan-images` runs a real LeWM checkpoint from JPEG current/goal images
+- `lewm-plan-fixture` runs CEM/MPPI/iCEM against checkpoint-backed LeWM fixture
+  inputs and public checkpoints; the PushT validation improves over the fixture
+  candidate baseline with all three solvers.
+- `lewm-plan-images` runs a LeWM checkpoint from JPEG current/goal images
   through nvJPEG, Candle CUDA preprocessing, LeWM encode/rollout/scoring, and a
   Rust planner, then emits HTML plus JSON.
-- `tools/run_pusht_lewm_rust_demo.py` runs the actual `swm/PushT-v1` env from
-  a real `pusht_expert_train.h5` start/goal sample, executes Rust-planned LeWM
-  actions, and emits an HTML/JSON/GIF rollout report. Latest run: dataset row
-  `209214`, two iCEM replans, `47` executed actions, success `true`.
-- `tools/benchmark_lewm_plan_images_python.py` compares the same real-image
+- `tools/run_pusht_lewm_rust_demo.py` runs `swm/PushT-v1` from
+  a `pusht_expert_train.h5` start/goal sample, executes Rust-planned LeWM
+  actions, and emits an HTML/JSON/GIF rollout report. Validation snapshot:
+  dataset row `209214`, two iCEM replans, `47` executed actions, success
+  `true`.
+- `tools/benchmark_lewm_plan_images_python.py` compares the same image-input
   LeWM planning workload against official Python/PyTorch inference.
 - Upstream `stable-worldmodel` support is tracked in
-  `docs/upstream-stable-worldmodel.md`; current audited commit is
+  `docs/upstream-stable-worldmodel.md`; the audited commit is
   `40dff37fc983c5276ada65eb1c7873cefbcccd8a`.
 - TD-MPC2 state/vector inference and CUDA fixture parity exist.
-- Python parity tooling now runs from this repo's `pyproject.toml`/`uv.lock`
+- Python parity tooling runs from this repo's `pyproject.toml`/`uv.lock`
   and depends on the official `stable-worldmodel[train]` package.
 - `tools/convert_state_dict_safetensors.py` converts PyTorch tensor state dicts
   into deployment-preferred `model.safetensors` files.
 - TD-MPC2 pixel CNN inference exists for NCHW/NHWC image tensors with CUDA
   fixture parity for pixel-only and mixed pixel+state.
-- Rust preprocessing exists for decoded RGB frame stacks, latest-frame pixel
+- Rust preprocessing exists for decoded RGB frame stacks, single-frame pixel
   tensors, normalized state arrays, and clamped action arrays.
-- `media` ingestion now decodes JPEG bytes through nvJPEG into Candle CUDA
+- `media` ingestion decodes JPEG bytes through nvJPEG into Candle CUDA
   U8 RGB tensors and preprocesses packed U8 RGB/BGR/RGBA/BGRA CUDA tensors into
   normalized F32 NCHW or NTCHW Candle tensors.
-- CUDA NV12 preprocessing now converts CUDA-resident Y and UV planes through
+- CUDA NV12 preprocessing converts CUDA-resident Y and UV planes through
   fused BT.601/BT.709 color conversion, resize, normalization, and NCHW/history
   writes for video-surface ingestion.
-- NVDECODE capability probing now binds the Candle CUDA context and queries
+- NVDECODE capability probing binds the Candle CUDA context and queries
   `libnvcuvid` for codec/chroma/bit-depth support; Rust and C ABI entrypoints
   cover 4:2:0 H.264/HEVC/AV1/VP9 probes.
-- NVDECODE decoder lifecycle now creates and destroys an 8-bit 4:2:0 CUVID
+- NVDECODE decoder lifecycle creates and destroys an 8-bit 4:2:0 CUVID
   decoder with NV12 output on the Candle CUDA context; Rust and C ABI tests
   cover H.264 decoder allocation.
-- NVDECODE parser sessions now accept Annex B packets, decode pictures, map
+- NVDECODE parser sessions accept Annex B packets, decode pictures, map
   display frames, and launch a CUDA copy into Rust-owned CUDA NV12 buffers; Rust
   and C ABI entrypoints cover parser lifecycle and packet validation, with an
-  opt-in real H.264 packet smoke test through `SWM_NVDEC_TEST_PACKET`.
-- The C ABI now exposes Rust-owned CUDA packed-image and NV12 media buffers,
+  opt-in H.264 packet validation through `SWM_NVDEC_TEST_PACKET`.
+- The C ABI exposes Rust-owned CUDA packed-image and NV12 media buffers,
   device pointer queries, and TD-MPC2/LeWM reset calls that preprocess those
   buffers before session reset. The CUDA media reset paths cache packed-image
   and NV12 preprocessor output tensors inside the runtime handle across
@@ -80,9 +81,9 @@ predictable and deployment practical.
 - `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
   and TD-MPC2 paths, including packed-image/NV12 CUDA preprocessing and
   TD-MPC2 CEM/MPPI/iCEM planning latency.
-- Python-vs-Rust TD-MPC2 CUDA runtime benchmarking now includes encoded JPEG
+- Python-vs-Rust TD-MPC2 CUDA runtime benchmarking includes encoded JPEG
   ingestion (`media_jpeg`), common model sections, and split fixed/generated
-  sampled actor rollout rows, with a generated SVG comparison graph in `docs/`.
+  sampled actor rollout rows, with an SVG comparison graph in `docs/`.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
 - TD-MPC2 actor-mean and stochastic sampled policy rollouts run through Candle
   CUDA tensors and are exposed through the Rust model API, session API,
@@ -102,7 +103,7 @@ predictable and deployment practical.
 
 **Goal**
 
-Make current behavior measurable before optimizing it.
+Make baseline behavior measurable before optimizing it.
 
 **Build**
 
@@ -270,10 +271,10 @@ Avoid rebuilding runtime state every control step.
 
 **Goal**
 
-Move the real MPC workload into Rust/Candle.
+Move the MPC runtime workload into Rust/Candle.
 
 A model forward pass answers: "what happens if I take this action?" A planner
-answers: "which action should I take now?" For MPC-style control, each runtime
+answers: "which action should I take at this step?" For MPC-style control, each runtime
 step generates many candidate action sequences, rolls the world model forward,
 scores trajectories, picks the best first action, and repeats at the next
 timestep. If this stays in Python, Rust/Candle only removes part of the
@@ -314,22 +315,22 @@ overhead.
   CEM/MPPI/iCEM planning.
 - `runtime-bench --model le-wm` reports representative LeWM C ABI planner rows
   for CEM, MPPI, and iCEM.
-- `lewm-plan-fixture` validates real-checkpoint LeWM goal planning with
-  generated planner candidates, scored through `LeWmGoalScorer` on Candle CUDA.
+- `lewm-plan-fixture` validates checkpoint-backed LeWM goal planning with
+  planner-sampled candidates, scored through `LeWmGoalScorer` on Candle CUDA.
 - `runtime-bench` reports `media_jpeg`, `media_packed`, and `media_nv12` rows
   so encoded image ingestion and image/video preprocessing kernels are tracked
   with the same p50/p95/p99 harness as model and planner work.
 - TD-MPC2 sampled actor rollout uses explicit CUDA noise tensors for parity and
-  generated Candle CUDA noise for deployment runs.
-- Planner seeded sampling now uses planner-owned cuRAND generators on the Candle
+  Candle CUDA RNG noise for deployment runs.
+- Planner seeded sampling uses planner-owned cuRAND generators on the Candle
   CUDA stream, reserves non-overlapping offset ranges per `plan` call, and keeps
   candidate noise generation inside CUDA tensors.
-- CEM/MPPI/iCEM planners now cache reusable action-bound tensors and initial
+- CEM/MPPI/iCEM planners cache reusable action-bound tensors and initial
   mean/std tensors per CUDA device location, dtype, shape, and scalar value.
 - Deadline handling is implemented for zero-completed-iteration cases: CEM and
   MPPI use a configured action, while iCEM prefers its warm-start sequence
   before using the configured action. `PlanResult` reports which path was used.
-- Planner configs expose a seed for deterministic CUDA RNG sampling; fresh
+- Planner configs expose a seed for deterministic CUDA RNG sampling; new
   planners replay from offset zero, persistent planners advance across control
   steps, and `reset_rng_sequence()` replays from the beginning.
 

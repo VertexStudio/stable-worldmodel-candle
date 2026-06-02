@@ -3,7 +3,7 @@
 This repo tracks the upstream `stable-worldmodel` commit it has audited and
 supports for checkpoint/runtime architecture.
 
-## Current Audit
+## Supported Upstream
 
 - Upstream repo: `https://github.com/galilai-group/stable-worldmodel`
 - Supported upstream branch: `main`
@@ -21,7 +21,7 @@ Diff from PyPI tag `56e64a6` to supported upstream commit `40dff37` touches:
 - `stable_worldmodel/wm/loss.py`
 
 The only Python source change is a training/loss device fix in `SIGReg`: random
-projection tensors now use `proj.device` instead of a hardcoded CUDA device.
+projection tensors use `proj.device` instead of a hardcoded CUDA device.
 This does not change LeWM inference architecture, checkpoint tensor layout,
 pixel encoding, action embedding, latent rollout, or goal-cost computation.
 
