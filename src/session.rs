@@ -61,9 +61,9 @@ impl LeWmSession {
         let (b, s, _, _) = action_candidates.dims4()?;
         let (_, h, d) = emb.dims3()?;
         let emb_init = emb.unsqueeze(1)?.broadcast_as((b, s, h, d))?;
-        let rollout = self
-            .model
-            .rollout_embeddings_with_history(&emb_init, &action_candidates, h)?;
+        let rollout =
+            self.model
+                .rollout_embeddings_with_history(&emb_init, &action_candidates, h)?;
         self.model.goal_cost(&rollout, &goal_emb)
     }
 }
@@ -103,7 +103,10 @@ mod tests {
         let emb_init = emb.unsqueeze(1)?.broadcast_as((1, 2, 1, emb.dim(2)?))?;
         let rollout = direct_model.rollout_embeddings_with_history(&emb_init, &actions, 1)?;
         let direct_cost = direct_model.goal_cost(&rollout, &goal_emb)?;
-        let max_abs = (session_cost - direct_cost)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        let max_abs = (session_cost - direct_cost)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
 
         assert!(max_abs <= 1e-6, "max abs diff {max_abs}");
         Ok(())

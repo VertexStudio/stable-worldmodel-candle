@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -93,6 +94,12 @@ struct Args {
 
     #[arg(long)]
     seed: Option<u64>,
+
+    #[arg(long, default_value_t = 0)]
+    warmup: usize,
+
+    #[arg(long, default_value_t = 1)]
+    iters: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +119,14 @@ struct ScoreStats {
     min: f32,
     max: f32,
     values: Vec<f32>,
+}
+
+#[derive(Debug, Clone)]
+struct BenchStats {
+    mean_ms: f64,
+    p50_ms: f64,
+    p95_ms: f64,
+    p99_ms: f64,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -161,18 +176,19 @@ fn main() -> anyhow::Result<()> {
     let goal_names = copy_images("goal", &args.goal, output_dir)?;
 
     let mut decoder = NvJpegDecoder::new(&device)?;
-    let (current, current_decode_ms) = timed_cuda(&device, || {
-        decode_history(
-            "current",
-            &args.current,
-            &current_names,
-            history,
-            &mut decoder,
-            &device,
-            preprocess,
-        )
-    })?;
-    let (goal, goal_decode_ms) = timed_cuda(&device, || {
+    let (current, current_decode_stats) =
+        timed_cuda_bench(&device, args.warmup, args.iters, || {
+            decode_history(
+                "current",
+                &args.current,
+                &current_names,
+                history,
+                &mut decoder,
+                &device,
+                preprocess,
+            )
+        })?;
+    let (goal, goal_decode_stats) = timed_cuda_bench(&device, args.warmup, args.iters, || {
         decode_history(
             "goal",
             &args.goal,
@@ -185,28 +201,31 @@ fn main() -> anyhow::Result<()> {
     })?;
 
     let mut session = LeWmSession::new(model, device.clone(), dtype);
-    let (current_emb, current_encode_ms) = timed_cuda(&device, || {
-        session
-            .reset_pixels(&current.pixels)
-            .map_err(anyhow::Error::from)
-    })?;
-    let (goal_emb, goal_encode_ms) = timed_cuda(&device, || {
+    let (current_emb, current_encode_stats) =
+        timed_cuda_bench(&device, args.warmup, args.iters, || {
+            session
+                .reset_pixels(&current.pixels)
+                .map_err(anyhow::Error::from)
+        })?;
+    let (goal_emb, goal_encode_stats) = timed_cuda_bench(&device, args.warmup, args.iters, || {
         session
             .encode_pixels(&goal.pixels)
             .map_err(anyhow::Error::from)
     })?;
     let scorer = LeWmGoalScorer::new(&session, &goal_emb);
 
-    let (plan_device_result, plan_ms) = timed_cuda(&device, || {
-        run_planner(&args, &scorer, horizon, args.samples, elites, action_dim)
-    })?;
+    let (plan_device_result, plan_stats) =
+        timed_cuda_bench(&device, args.warmup, args.iters, || {
+            run_planner(&args, &scorer, horizon, args.samples, elites, action_dim)
+        })?;
     let selected_sequence = plan_device_result.sequence.clone();
     let selected_sequence_for_score = selected_sequence.unsqueeze(1)?;
-    let (selected_cost_tensor, selected_score_ms) = timed_cuda(&device, || {
-        scorer
-            .score_candidates(&selected_sequence_for_score)
-            .map_err(anyhow::Error::from)
-    })?;
+    let (selected_cost_tensor, selected_score_stats) =
+        timed_cuda_bench(&device, args.warmup, args.iters, || {
+            scorer
+                .score_candidates(&selected_sequence_for_score)
+                .map_err(anyhow::Error::from)
+        })?;
     let plan_result = plan_device_result.materialize()?;
 
     let first_action = plan_result
@@ -229,14 +248,22 @@ fn main() -> anyhow::Result<()> {
     let score_stats = score_stats(&plan_result.scores)?;
     let total_ms = duration_ms(total_started.elapsed());
 
+    let benchmark_stats = benchmark_stats_json([
+        ("current_decode_preprocess", &current_decode_stats),
+        ("goal_decode_preprocess", &goal_decode_stats),
+        ("current_encode", &current_encode_stats),
+        ("goal_encode", &goal_encode_stats),
+        ("planning", &plan_stats),
+        ("selected_score", &selected_score_stats),
+    ]);
     let timing = json!({
         "checkpoint_load": load_ms,
-        "current_decode_preprocess": current_decode_ms,
-        "goal_decode_preprocess": goal_decode_ms,
-        "current_encode": current_encode_ms,
-        "goal_encode": goal_encode_ms,
-        "planning": plan_ms,
-        "selected_score": selected_score_ms,
+        "current_decode_preprocess": current_decode_stats.p50_ms,
+        "goal_decode_preprocess": goal_decode_stats.p50_ms,
+        "current_encode": current_encode_stats.p50_ms,
+        "goal_encode": goal_encode_stats.p50_ms,
+        "planning": plan_stats.p50_ms,
+        "selected_score": selected_score_stats.p50_ms,
         "total": total_ms,
     });
     let payload = json!({
@@ -254,6 +281,8 @@ fn main() -> anyhow::Result<()> {
         "samples": args.samples,
         "elites": elites,
         "iterations": args.iterations,
+        "warmup": args.warmup,
+        "iters": args.iters,
         "action_dim": action_dim,
         "embedding_shape": current_emb.dims(),
         "goal_embedding_shape": goal_emb.dims(),
@@ -268,6 +297,7 @@ fn main() -> anyhow::Result<()> {
         "current_image_info": image_info_json(current.info),
         "goal_image_info": image_info_json(goal.info),
         "timing_ms": timing,
+        "benchmark_stats": benchmark_stats,
         "score": {
             "selected_cost": selected_cost,
             "final_best": score_stats.best,
@@ -304,7 +334,7 @@ fn main() -> anyhow::Result<()> {
     println!("json={}", json_output.display());
     println!(
         "planner={:?} selected_cost={:.6} final_best={:.6} plan_ms={:.3}",
-        args.planner, selected_cost, score_stats.best, plan_ms
+        args.planner, selected_cost, score_stats.best, plan_stats.p50_ms
     );
 
     Ok(())
@@ -322,6 +352,9 @@ fn validate_args(args: &Args) -> anyhow::Result<()> {
     }
     if args.iterations == 0 {
         anyhow::bail!("--iterations must be greater than zero");
+    }
+    if args.iters == 0 {
+        anyhow::bail!("--iters must be greater than zero");
     }
     Ok(())
 }
@@ -467,19 +500,72 @@ fn percentile(sorted: &[f32], q: f32) -> f32 {
     sorted[idx.min(sorted.len() - 1)]
 }
 
-fn timed_cuda<T>(
+fn timed_cuda_bench<T>(
     device: &Device,
-    op: impl FnOnce() -> anyhow::Result<T>,
-) -> anyhow::Result<(T, f64)> {
+    warmup: usize,
+    iters: usize,
+    mut op: impl FnMut() -> anyhow::Result<T>,
+) -> anyhow::Result<(T, BenchStats)> {
+    for _ in 0..warmup {
+        op()?;
+    }
     device.synchronize()?;
-    let started = Instant::now();
-    let value = op()?;
-    device.synchronize()?;
-    Ok((value, duration_ms(started.elapsed())))
+
+    let mut samples = Vec::with_capacity(iters);
+    let mut value = None;
+    for _ in 0..iters {
+        device.synchronize()?;
+        let started = Instant::now();
+        value = Some(op()?);
+        device.synchronize()?;
+        samples.push(started.elapsed());
+    }
+    let value = value.context("benchmark produced no timed value")?;
+    Ok((value, bench_stats(samples)))
 }
 
 fn duration_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
+}
+
+fn duration_ms_ref(duration: &Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+fn bench_stats(mut samples: Vec<Duration>) -> BenchStats {
+    samples.sort_unstable();
+    let total_ms = samples.iter().map(duration_ms_ref).sum::<f64>();
+    BenchStats {
+        mean_ms: total_ms / samples.len() as f64,
+        p50_ms: duration_ms_ref(&samples[percentile_index(samples.len(), 0.50)]),
+        p95_ms: duration_ms_ref(&samples[percentile_index(samples.len(), 0.95)]),
+        p99_ms: duration_ms_ref(&samples[percentile_index(samples.len(), 0.99)]),
+    }
+}
+
+fn percentile_index(len: usize, percentile: f64) -> usize {
+    let idx = ((len.saturating_sub(1)) as f64 * percentile).ceil() as usize;
+    idx.min(len.saturating_sub(1))
+}
+
+fn benchmark_stats_json<'a>(
+    rows: impl IntoIterator<Item = (&'a str, &'a BenchStats)>,
+) -> serde_json::Value {
+    let stats = rows
+        .into_iter()
+        .map(|(name, stats)| {
+            (
+                name.to_string(),
+                json!({
+                    "mean_ms": stats.mean_ms,
+                    "p50_ms": stats.p50_ms,
+                    "p95_ms": stats.p95_ms,
+                    "p99_ms": stats.p99_ms,
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    json!(stats)
 }
 
 fn copy_images(prefix: &str, paths: &[PathBuf], output_dir: &Path) -> anyhow::Result<Vec<String>> {
@@ -551,7 +637,7 @@ pre {{ overflow: auto; background: #0a0d12; border: 1px solid var(--line); borde
 <body>
 <main>
 <h1>{title}</h1>
-<p class="sub">Real stable-worldmodel LeWM checkpoint, JPEG decode through nvJPEG, Candle CUDA encode/rollout/scoring, Rust planner output. JSON: {json_name}</p>
+<p class="sub">stable-worldmodel LeWM checkpoint, JPEG decode through nvJPEG, Candle CUDA encode/rollout/scoring, Rust planner output. JSON: {json_name}</p>
 <section class="grid">
 <div class="panel">
 <h2>Current Image History</h2>

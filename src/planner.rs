@@ -1303,7 +1303,10 @@ fn cuda_lowest_score_indices(scores: &Tensor, count: usize) -> Result<Option<Ten
         return Ok(None);
     }
     let [batch, samples] = scores.dims() else {
-        candle::bail!("score tensor must have shape [batch, samples], got {:?}", scores.shape());
+        candle::bail!(
+            "score tensor must have shape [batch, samples], got {:?}",
+            scores.shape()
+        );
     };
     if *samples == 0 {
         candle::bail!("score tensor must contain at least one sample");
@@ -1330,11 +1333,8 @@ fn cuda_lowest_score_indices(scores: &Tensor, count: usize) -> Result<Option<Ten
         LOWEST_K_INDICES_CUDA,
         "lowest-score-indices",
     )?;
-    let func = cuda.get_or_load_custom_func(
-        "swm_lowest_k_indices_f32",
-        "swm_planner_lowest_k",
-        ptx,
-    )?;
+    let func =
+        cuda.get_or_load_custom_func("swm_lowest_k_indices_f32", "swm_planner_lowest_k", ptx)?;
 
     let sort_len = (*samples).next_power_of_two();
     let block_dim = sort_len.min(1024) as u32;
@@ -1518,19 +1518,14 @@ mod tests {
         let scores = Tensor::new(&[[3f32, 1., 4., 0.5], [9., -1., 2., -2.]], &device)?;
         let indices = lowest_score_indices(&scores, 3)?;
 
-        assert_eq!(
-            indices.to_vec2::<u32>()?,
-            &[[3, 1, 0], [3, 1, 2]]
-        );
+        assert_eq!(indices.to_vec2::<u32>()?, &[[3, 1, 0], [3, 1, 2]]);
         Ok(())
     }
 
     #[test]
     fn lowest_score_indices_covers_benchmark_sample_count() -> Result<()> {
         let device = Device::new_cuda(0)?;
-        let scores = (0..1024)
-            .map(|idx| (1024 - idx) as f32)
-            .collect::<Vec<_>>();
+        let scores = (0..1024).map(|idx| (1024 - idx) as f32).collect::<Vec<_>>();
         let scores = Tensor::from_vec(scores, (1, 1024), &device)?;
         let indices = lowest_score_indices(&scores, 4)?;
 

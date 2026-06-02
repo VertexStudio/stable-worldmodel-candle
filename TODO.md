@@ -38,6 +38,9 @@ predictable and deployment practical.
 - `lewm-plan-images` runs a LeWM checkpoint from JPEG current/goal images
   through nvJPEG, Candle CUDA preprocessing, LeWM encode/rollout/scoring, and a
   Rust planner, then emits HTML plus JSON.
+- LeWM session scoring uses the cached input history length, so image-history
+  runs such as PushT `history_size=1` are scored with the same rollout history
+  semantics as the Python comparison.
 - `tools/run_pusht_lewm_rust_demo.py` runs `swm/PushT-v1` from
   a `pusht_expert_train.h5` start/goal sample, executes Rust-planned LeWM
   actions, and emits an HTML/JSON/GIF rollout report. Validation snapshot:
@@ -84,6 +87,9 @@ predictable and deployment practical.
 - Python-vs-Rust TD-MPC2 CUDA runtime benchmarking includes encoded JPEG
   ingestion (`media_jpeg`), common model sections, and split fixed/generated
   sampled actor rollout rows, with an SVG comparison graph in `docs/`.
+- Python-vs-Rust LeWM image planning benchmarking reports synchronized CUDA
+  p50/p95/p99 stats for repeated runs and regenerates the README graph from
+  p50 latency.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
 - TD-MPC2 actor-mean and stochastic sampled policy rollouts run through Candle
   CUDA tensors and are exposed through the Rust model API, session API,
@@ -93,7 +99,7 @@ predictable and deployment practical.
   selected device.
 - MPPI exists and keeps its softmax-weighted control update in Candle tensors
   on the selected device.
-- iCEM exists with device-side elite selection, elite carryover between
+- iCEM exists with CUDA lowest-k elite selection, elite carryover between
   iterations, and a shifted warm-start sequence between `plan` calls.
 - Deployment interfaces are currently the Rust library, CLI tools, and an
   initial C ABI for TD-MPC2 state/vector, pixel, and mixed state+pixel
@@ -306,8 +312,9 @@ overhead.
 - `TdMpc2Session` implements the planner scorer interface directly.
 - `LeWmGoalScorer` adapts `LeWmSession` plus a goal embedding to the same
   scorer interface.
-- CEM/iCEM elite selection uses Candle sort/gather ops on the selected device.
-  `PlanResult::used_host_elite_selection` is false for the built-in planners.
+- CEM/iCEM elite selection uses the CUDA lowest-k path plus Candle gather on the
+  selected device. `PlanResult::used_host_elite_selection` is false for the
+  built-in planners.
 - `runtime-bench --model td-mpc2` reports CEM, MPPI, and iCEM planner latency
   using the same session/scorer path as deployment code.
 - `runtime-bench --model td-mpc2` reports representative TD-MPC2 C ABI rows for

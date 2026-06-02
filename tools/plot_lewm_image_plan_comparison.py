@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a LeWM real-image Python-vs-Rust planning benchmark as SVG."""
+"""Render a LeWM image-input Python-vs-Rust planning benchmark as SVG."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--python", required=True, type=Path, dest="python_json")
     parser.add_argument("--rust", required=True, type=Path, dest="rust_json")
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--title", default="LeWM Real-Image Planning Latency")
+    parser.add_argument("--title", default="LeWM PushT Image Planning Latency")
     return parser.parse_args()
 
 
@@ -34,8 +34,8 @@ def main() -> None:
     rust = json.loads(args.rust_json.read_text(encoding="utf-8"))
     rows = []
     for key, label in DEFAULT_ROWS:
-        py = float(python["timing_ms"][key])
-        rs = float(rust["timing_ms"][key])
+        py = benchmark_value_ms(python, key)
+        rs = benchmark_value_ms(rust, key)
         rows.append((label, py, rs, py / rs if rs > 0 else 0.0))
 
     subtitle = (
@@ -47,6 +47,13 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(svg, encoding="utf-8")
     print(f"wrote {args.output}")
+
+
+def benchmark_value_ms(payload: dict, key: str) -> float:
+    stats = payload.get("benchmark_stats", {}).get(key)
+    if stats is not None and "p50_ms" in stats:
+        return float(stats["p50_ms"])
+    return float(payload["timing_ms"][key])
 
 
 def render_svg(

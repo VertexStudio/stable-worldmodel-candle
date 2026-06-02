@@ -203,6 +203,8 @@ cargo run --release --locked --features hub --bin lewm-plan-images -- \
   --horizon 5 \
   --history-size 1 \
   --seed 7 \
+  --warmup 10 \
+  --iters 50 \
   --output target/reports/pusht-demo/lewm-pusht-rust-plan-r00.html
 
 uv run --locked --no-dev \
@@ -216,6 +218,8 @@ uv run --locked --no-dev \
   --horizon 5 \
   --history-size 1 \
   --seed 7 \
+  --warmup 10 \
+  --iters 50 \
   --output target/reports/pusht-demo/lewm-pusht-python-plan-r00.json
 ```
 
@@ -237,30 +241,33 @@ Validation snapshot (2026-06-02, PushT environment demo, RTX 4090):
   `209239`, goal offset `25`.
 - Setup: PushT H5 current/goal images, history size `1`, checkpoint history
   size `3`, horizon `5`, action dim `10`, iCEM samples `1024`, elites `256`,
-  iterations `5`, planner seed `7`.
+  iterations `5`, planner seed `7`, benchmark warmup `10`, timed iterations
+  `50`.
 - Rust env demo: two replans, `47` executed env actions, success `true`,
   final distance `28.178723`, planner costs `95.319412 -> 33.028206`,
   total planner time `513.175 ms`.
 - Candidate RNG is backend-native: Rust uses cuRAND through Candle/cudarc,
   Python uses PyTorch CUDA RNG. Compare workload latency and cost distribution;
   identical first actions are not expected from this run.
+- Metric: synchronized CUDA p50 latency. The Rust planner row excludes
+  JSON/HTML host diagnostics and keeps elite/best-index selection on CUDA.
 
 | Stage | Rust CUDA | Python CUDA | Python/Rust |
 | --- | ---: | ---: | ---: |
-| Current JPEG decode + preprocess | `16.673 ms` | `20.175 ms` | `1.21x` |
-| Goal JPEG decode + preprocess | `0.120 ms` | `0.824 ms` | `6.87x` |
-| Current LeWM encode | `143.124 ms` | `137.283 ms` | `0.96x` |
-| Goal LeWM encode | `2.798 ms` | `3.557 ms` | `1.27x` |
-| iCEM planning | `261.153 ms` | `256.130 ms` | `0.98x` |
-| Selected-score pass | `17.992 ms` | `19.714 ms` | `1.10x` |
+| Current JPEG decode + preprocess | `0.077 ms` | `0.347 ms` | `4.53x` |
+| Goal JPEG decode + preprocess | `0.071 ms` | `0.345 ms` | `4.86x` |
+| Current LeWM encode | `2.431 ms` | `3.177 ms` | `1.31x` |
+| Goal LeWM encode | `2.405 ms` | `3.200 ms` | `1.33x` |
+| iCEM planning | `85.628 ms` | `148.030 ms` | `1.73x` |
+| Selected-score pass | `9.314 ms` | `12.020 ms` | `1.29x` |
 
 | Metric | Rust CUDA | Python CUDA |
 | --- | ---: | ---: |
-| Selected cost | `95.319412` | `52.160725` |
-| Final candidate best | `95.319305` | `52.160690` |
-| Final candidate mean | `217.092865` | `222.353424` |
-| Final candidate p50 | `207.558655` | `208.755234` |
-| Final candidate p95 | `306.528168` | `320.742249` |
+| Selected cost | `97.132942` | `76.911148` |
+| Final candidate best | `97.132889` | `76.911148` |
+| Final candidate mean | `217.140869` | `218.385162` |
+| Final candidate p50 | `206.143646` | `206.858002` |
+| Final candidate p95 | `305.687683` | `316.984436` |
 
 Regenerate the LeWM image-planning graph:
 

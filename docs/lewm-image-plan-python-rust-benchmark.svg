@@ -15,48 +15,48 @@ text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,
 <line class="grid" x1="230.0" y1="96" x2="230.0" y2="482"/>
 <text class="sub" x="230.0" y="500" text-anchor="middle">0ms</text>
 <line class="grid" x1="392.5" y1="96" x2="392.5" y2="482"/>
-<text class="sub" x="392.5" y="500" text-anchor="middle">65ms</text>
+<text class="sub" x="392.5" y="500" text-anchor="middle">37ms</text>
 <line class="grid" x1="555.0" y1="96" x2="555.0" y2="482"/>
-<text class="sub" x="555.0" y="500" text-anchor="middle">131ms</text>
+<text class="sub" x="555.0" y="500" text-anchor="middle">74ms</text>
 <line class="grid" x1="717.5" y1="96" x2="717.5" y2="482"/>
-<text class="sub" x="717.5" y="500" text-anchor="middle">196ms</text>
+<text class="sub" x="717.5" y="500" text-anchor="middle">111ms</text>
 <line class="grid" x1="880.0" y1="96" x2="880.0" y2="482"/>
-<text class="sub" x="880.0" y="500" text-anchor="middle">261ms</text>
+<text class="sub" x="880.0" y="500" text-anchor="middle">148ms</text>
 <line class="axis" x1="230" y1="482" x2="880" y2="482"/>
 <text class="label" x="28" y="123">current media</text>
-<rect class="py" x="230" y="104" width="50.2" height="18" rx="4"/>
-<rect class="rs" x="230" y="128" width="41.5" height="18" rx="4"/>
-<text class="value" x="288.2" y="118" text-anchor="start">20.175 ms</text>
-<text class="value" x="279.5" y="142" text-anchor="start">16.673 ms</text>
-<text class="speed" x="904" y="131">1.21x</text>
+<rect class="py" x="230" y="104" width="1.5" height="18" rx="4"/>
+<rect class="rs" x="230" y="128" width="0.3" height="18" rx="4"/>
+<text class="value" x="239.5" y="118" text-anchor="start">0.347 ms</text>
+<text class="value" x="238.3" y="142" text-anchor="start">0.077 ms</text>
+<text class="speed" x="904" y="131">4.53x</text>
 <text class="label" x="28" y="185">goal media</text>
-<rect class="py" x="230" y="166" width="2.1" height="18" rx="4"/>
+<rect class="py" x="230" y="166" width="1.5" height="18" rx="4"/>
 <rect class="rs" x="230" y="190" width="0.3" height="18" rx="4"/>
-<text class="value" x="240.1" y="180" text-anchor="start">0.824 ms</text>
-<text class="value" x="238.3" y="204" text-anchor="start">0.120 ms</text>
-<text class="speed" x="904" y="193">6.87x</text>
+<text class="value" x="239.5" y="180" text-anchor="start">0.345 ms</text>
+<text class="value" x="238.3" y="204" text-anchor="start">0.071 ms</text>
+<text class="speed" x="904" y="193">4.86x</text>
 <text class="label" x="28" y="247">current encode</text>
-<rect class="py" x="230" y="228" width="341.7" height="18" rx="4"/>
-<rect class="rs" x="230" y="252" width="356.2" height="18" rx="4"/>
-<text class="value" x="579.7" y="242" text-anchor="start">137.283 ms</text>
-<text class="value" x="594.2" y="266" text-anchor="start">143.124 ms</text>
-<text class="speed" x="904" y="255">0.96x</text>
+<rect class="py" x="230" y="228" width="14.0" height="18" rx="4"/>
+<rect class="rs" x="230" y="252" width="10.7" height="18" rx="4"/>
+<text class="value" x="252.0" y="242" text-anchor="start">3.177 ms</text>
+<text class="value" x="248.7" y="266" text-anchor="start">2.431 ms</text>
+<text class="speed" x="904" y="255">1.31x</text>
 <text class="label" x="28" y="309">goal encode</text>
-<rect class="py" x="230" y="290" width="8.9" height="18" rx="4"/>
-<rect class="rs" x="230" y="314" width="7.0" height="18" rx="4"/>
-<text class="value" x="246.9" y="304" text-anchor="start">3.557 ms</text>
-<text class="value" x="245.0" y="328" text-anchor="start">2.798 ms</text>
-<text class="speed" x="904" y="317">1.27x</text>
+<rect class="py" x="230" y="290" width="14.1" height="18" rx="4"/>
+<rect class="rs" x="230" y="314" width="10.6" height="18" rx="4"/>
+<text class="value" x="252.1" y="304" text-anchor="start">3.200 ms</text>
+<text class="value" x="248.6" y="328" text-anchor="start">2.405 ms</text>
+<text class="speed" x="904" y="317">1.33x</text>
 <text class="label" x="28" y="371">iCEM planning</text>
-<rect class="py" x="230" y="352" width="637.5" height="18" rx="4"/>
-<rect class="rs" x="230" y="376" width="650.0" height="18" rx="4"/>
-<text class="value" x="859.5" y="366" text-anchor="end">256.130 ms</text>
-<text class="value" x="872.0" y="390" text-anchor="end">261.153 ms</text>
-<text class="speed" x="904" y="379">0.98x</text>
+<rect class="py" x="230" y="352" width="650.0" height="18" rx="4"/>
+<rect class="rs" x="230" y="376" width="376.0" height="18" rx="4"/>
+<text class="value" x="872.0" y="366" text-anchor="end">148.030 ms</text>
+<text class="value" x="614.0" y="390" text-anchor="start">85.628 ms</text>
+<text class="speed" x="904" y="379">1.73x</text>
 <text class="label" x="28" y="433">selected score</text>
-<rect class="py" x="230" y="414" width="49.1" height="18" rx="4"/>
-<rect class="rs" x="230" y="438" width="44.8" height="18" rx="4"/>
-<text class="value" x="287.1" y="428" text-anchor="start">19.714 ms</text>
-<text class="value" x="282.8" y="452" text-anchor="start">17.992 ms</text>
-<text class="speed" x="904" y="441">1.10x</text>
+<rect class="py" x="230" y="414" width="52.8" height="18" rx="4"/>
+<rect class="rs" x="230" y="438" width="40.9" height="18" rx="4"/>
+<text class="value" x="290.8" y="428" text-anchor="start">12.020 ms</text>
+<text class="value" x="278.9" y="452" text-anchor="start">9.314 ms</text>
+<text class="speed" x="904" y="441">1.29x</text>
 </svg>

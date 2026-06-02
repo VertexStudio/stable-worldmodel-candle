@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark real-image LeWM planning through the Python implementation."""
+"""Benchmark image-input LeWM planning through the Python implementation."""
 
 from __future__ import annotations
 
@@ -48,6 +48,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--image-size", type=int, default=224)
+    parser.add_argument("--warmup", type=int, default=0)
+    parser.add_argument("--iters", type=int, default=1)
     return parser.parse_args()
 
 
@@ -87,18 +89,20 @@ def main() -> None:
     if elites > args.samples:
         raise ValueError("--elites cannot exceed --samples")
 
-    current_loaded, current_media_ms = timed_cuda(
-        device, lambda: load_history(args.current, history, args.image_size, device)
+    current_loaded, current_media_stats = bench_cuda(
+        device, args, lambda: load_history(args.current, history, args.image_size, device)
     )
     current_pixels, current_info = current_loaded
-    goal_loaded, goal_media_ms = timed_cuda(
-        device, lambda: load_history(args.goal, history, args.image_size, device)
+    goal_loaded, goal_media_stats = bench_cuda(
+        device, args, lambda: load_history(args.goal, history, args.image_size, device)
     )
     goal_pixels, goal_info = goal_loaded
-    current_emb, current_encode_ms = timed_cuda(
-        device, lambda: encode_pixels(model, current_pixels)
+    current_emb, current_encode_stats = bench_cuda(
+        device, args, lambda: encode_pixels(model, current_pixels)
     )
-    goal_emb, goal_encode_ms = timed_cuda(device, lambda: encode_pixels(model, goal_pixels))
+    goal_emb, goal_encode_stats = bench_cuda(
+        device, args, lambda: encode_pixels(model, goal_pixels)
+    )
 
     def score(candidates: torch.Tensor) -> torch.Tensor:
         return score_candidates(
@@ -117,9 +121,9 @@ def main() -> None:
         planner_fn = lambda: plan_mppi(args, score, horizon, action_dim, device)
     else:
         planner_fn = lambda: plan_icem(args, score, horizon, action_dim, elites, device)
-    plan_result, planning_ms = timed_cuda(device, planner_fn)
-    selected_cost_tensor, selected_score_ms = timed_cuda(
-        device, lambda: score(plan_result.sequence.unsqueeze(1))
+    plan_result, planning_stats = bench_cuda(device, args, planner_fn)
+    selected_cost_tensor, selected_score_stats = bench_cuda(
+        device, args, lambda: score(plan_result.sequence.unsqueeze(1))
     )
 
     selected_cost = float(selected_cost_tensor.detach().cpu()[0, 0])
@@ -138,6 +142,8 @@ def main() -> None:
         "samples": args.samples,
         "elites": elites,
         "iterations": args.iterations,
+        "warmup": args.warmup,
+        "iters": args.iters,
         "action_dim": action_dim,
         "embedding_shape": list(current_emb.shape),
         "goal_embedding_shape": list(goal_emb.shape),
@@ -153,13 +159,21 @@ def main() -> None:
         "goal_image_info": goal_info,
         "timing_ms": {
             "checkpoint_load": load_ms,
-            "current_decode_preprocess": current_media_ms,
-            "goal_decode_preprocess": goal_media_ms,
-            "current_encode": current_encode_ms,
-            "goal_encode": goal_encode_ms,
-            "planning": planning_ms,
-            "selected_score": selected_score_ms,
+            "current_decode_preprocess": current_media_stats["p50_ms"],
+            "goal_decode_preprocess": goal_media_stats["p50_ms"],
+            "current_encode": current_encode_stats["p50_ms"],
+            "goal_encode": goal_encode_stats["p50_ms"],
+            "planning": planning_stats["p50_ms"],
+            "selected_score": selected_score_stats["p50_ms"],
             "total": total_ms,
+        },
+        "benchmark_stats": {
+            "current_decode_preprocess": current_media_stats,
+            "goal_decode_preprocess": goal_media_stats,
+            "current_encode": current_encode_stats,
+            "goal_encode": goal_encode_stats,
+            "planning": planning_stats,
+            "selected_score": selected_score_stats,
         },
         "score": {
             "selected_cost": selected_cost,
@@ -184,7 +198,7 @@ def main() -> None:
     print(f"json={args.output}")
     print(
         "planner={} selected_cost={:.6f} final_best={:.6f} plan_ms={:.3f}".format(
-            args.planner, selected_cost, score_stats["best"], planning_ms
+            args.planner, selected_cost, score_stats["best"], planning_stats["p50_ms"]
         )
     )
 
@@ -212,6 +226,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--samples must be at least 2")
     if args.iterations <= 0:
         raise ValueError("--iterations must be greater than zero")
+    if args.warmup < 0:
+        raise ValueError("--warmup must be non-negative")
+    if args.iters <= 0:
+        raise ValueError("--iters must be greater than zero")
 
 
 def load_history(
@@ -443,6 +461,40 @@ def timed_cuda(
     value = fn()
     torch.cuda.synchronize(device)
     return value, (time.perf_counter() - started) * 1000.0
+
+
+def bench_cuda(
+    device: torch.device,
+    args: argparse.Namespace,
+    fn: Callable[[], object],
+) -> tuple[object, dict[str, float]]:
+    for _ in range(args.warmup):
+        fn()
+    torch.cuda.synchronize(device)
+
+    samples: list[float] = []
+    value = None
+    for _ in range(args.iters):
+        torch.cuda.synchronize(device)
+        started = time.perf_counter()
+        value = fn()
+        torch.cuda.synchronize(device)
+        samples.append((time.perf_counter() - started) * 1000.0)
+    if value is None:
+        raise RuntimeError("benchmark produced no timed value")
+
+    samples.sort()
+    return value, {
+        "mean_ms": sum(samples) / len(samples),
+        "p50_ms": percentile_ms(samples, 0.50),
+        "p95_ms": percentile_ms(samples, 0.95),
+        "p99_ms": percentile_ms(samples, 0.99),
+    }
+
+
+def percentile_ms(samples: list[float], pct: float) -> float:
+    idx = min(len(samples) - 1, int((len(samples) - 1) * pct + 0.999999))
+    return samples[idx]
 
 
 def git_commit() -> str:
