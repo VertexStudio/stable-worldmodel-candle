@@ -345,6 +345,36 @@ pub struct PlanResult {
     pub used_host_elite_selection: bool,
 }
 
+#[derive(Debug)]
+pub struct PlanDeviceResult {
+    pub first_action: Tensor,
+    pub sequence: Tensor,
+    pub scores: Tensor,
+    pub best_indices: Tensor,
+    pub iterations_completed: usize,
+    pub elapsed: Duration,
+    pub deadline_reached: bool,
+    pub fallback: PlanFallback,
+    pub used_host_elite_selection: bool,
+}
+
+impl PlanDeviceResult {
+    pub fn materialize(self) -> Result<PlanResult> {
+        let best_indices = best_indices_from_tensor(&self.best_indices)?;
+        Ok(PlanResult {
+            first_action: self.first_action,
+            sequence: self.sequence,
+            scores: self.scores,
+            best_indices,
+            iterations_completed: self.iterations_completed,
+            elapsed: self.elapsed,
+            deadline_reached: self.deadline_reached,
+            fallback: self.fallback,
+            used_host_elite_selection: self.used_host_elite_selection,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CemPlanner {
     config: CemConfig,
@@ -374,6 +404,10 @@ impl CemPlanner {
     }
 
     pub fn plan<S: CandidateScorer>(&self, scorer: &S) -> Result<PlanResult> {
+        self.plan_device(scorer)?.materialize()
+    }
+
+    pub fn plan_device<S: CandidateScorer>(&self, scorer: &S) -> Result<PlanDeviceResult> {
         self.config.validate()?;
         let start = Instant::now();
         let device = scorer.device();
@@ -452,18 +486,16 @@ impl CemPlanner {
             .ok_or_else(|| candle::Error::Msg("CEM did not complete any iteration".to_string()))?;
         let scores = last_scores
             .ok_or_else(|| candle::Error::Msg("CEM did not produce scores".to_string()))?;
-        let sorted_indices = sorted_score_indices(&scores)?;
-        let best_index_tensor = sorted_indices.narrow(1, 0, 1)?;
-        let best_indices = best_indices_from_tensor(&best_index_tensor)?;
+        let best_index_tensor = lowest_score_indices(&scores, 1)?;
         let sequence = gather_candidate_sequences(&candidates, &best_index_tensor)?.squeeze(1)?;
         let first_action = sequence.i((.., 0, ..))?;
         let elapsed = start.elapsed();
 
-        Ok(PlanResult {
+        Ok(PlanDeviceResult {
             first_action,
             sequence,
             scores,
-            best_indices,
+            best_indices: best_index_tensor,
             iterations_completed,
             elapsed,
             deadline_reached,
@@ -502,6 +534,10 @@ impl MppiPlanner {
     }
 
     pub fn plan<S: CandidateScorer>(&self, scorer: &S) -> Result<PlanResult> {
+        self.plan_device(scorer)?.materialize()
+    }
+
+    pub fn plan_device<S: CandidateScorer>(&self, scorer: &S) -> Result<PlanDeviceResult> {
         self.config.validate()?;
         let start = Instant::now();
         let device = scorer.device();
@@ -574,18 +610,16 @@ impl MppiPlanner {
 
         let scores = last_scores
             .ok_or_else(|| candle::Error::Msg("MPPI did not produce scores".to_string()))?;
-        let sorted_indices = sorted_score_indices(&scores)?;
-        let best_index_tensor = sorted_indices.narrow(1, 0, 1)?;
-        let best_indices = best_indices_from_tensor(&best_index_tensor)?;
+        let best_index_tensor = lowest_score_indices(&scores, 1)?;
         let sequence = mean;
         let first_action = sequence.i((.., 0, ..))?;
         let elapsed = start.elapsed();
 
-        Ok(PlanResult {
+        Ok(PlanDeviceResult {
             first_action,
             sequence,
             scores,
-            best_indices,
+            best_indices: best_index_tensor,
             iterations_completed,
             elapsed,
             deadline_reached,
@@ -638,6 +672,10 @@ impl IcemPlanner {
     }
 
     pub fn plan<S: CandidateScorer>(&mut self, scorer: &S) -> Result<PlanResult> {
+        self.plan_device(scorer)?.materialize()
+    }
+
+    pub fn plan_device<S: CandidateScorer>(&mut self, scorer: &S) -> Result<PlanDeviceResult> {
         self.config.validate()?;
         let start = Instant::now();
         let device = scorer.device();
@@ -735,19 +773,17 @@ impl IcemPlanner {
             .ok_or_else(|| candle::Error::Msg("iCEM did not complete any iteration".to_string()))?;
         let scores = last_scores
             .ok_or_else(|| candle::Error::Msg("iCEM did not produce scores".to_string()))?;
-        let sorted_indices = sorted_score_indices(&scores)?;
-        let best_index_tensor = sorted_indices.narrow(1, 0, 1)?;
-        let best_indices = best_indices_from_tensor(&best_index_tensor)?;
+        let best_index_tensor = lowest_score_indices(&scores, 1)?;
         let sequence = gather_candidate_sequences(&candidates, &best_index_tensor)?.squeeze(1)?;
         self.warm_start = Some(shift_sequence_for_warm_start(&sequence)?);
         let first_action = sequence.i((.., 0, ..))?;
         let elapsed = start.elapsed();
 
-        Ok(PlanResult {
+        Ok(PlanDeviceResult {
             first_action,
             sequence,
             scores,
-            best_indices,
+            best_indices: best_index_tensor,
             iterations_completed,
             elapsed,
             deadline_reached,
@@ -840,7 +876,7 @@ fn configured_fallback_result(
     device: &Device,
     start: Instant,
     planner_name: &str,
-) -> Result<PlanResult> {
+) -> Result<PlanDeviceResult> {
     let Some(action) = fallback_action else {
         candle::bail!(
             "{planner_name} deadline reached before any iteration completed and no fallback_action is configured"
@@ -876,14 +912,14 @@ fn fallback_plan_result(
     device: &Device,
     start: Instant,
     fallback: PlanFallback,
-) -> Result<PlanResult> {
+) -> Result<PlanDeviceResult> {
     let batch = sequence.dim(0)?;
     let first_action = sequence.i((.., 0, ..))?;
-    Ok(PlanResult {
+    Ok(PlanDeviceResult {
         first_action,
         sequence,
         scores: Tensor::zeros((batch, 1), dtype, device)?,
-        best_indices: vec![0; batch],
+        best_indices: Tensor::zeros((batch, 1), DType::U32, device)?,
         iterations_completed: 0,
         elapsed: start.elapsed(),
         deadline_reached: true,
@@ -1240,19 +1276,15 @@ fn validate_scores_shape(scores: &Tensor, batch: usize, samples: usize) -> Resul
     }
 }
 
-fn validate_scores_values(scores: &Tensor) -> Result<()> {
-    let scores = scores.to_dtype(DType::F32)?;
-    let min = scores.min_all()?.to_scalar::<f32>()?;
-    let max = scores.max_all()?.to_scalar::<f32>()?;
-    if !min.is_finite() || !max.is_finite() {
-        candle::bail!("scores contain non-finite values: min={min} max={max}");
+fn lowest_score_indices(scores: &Tensor, count: usize) -> Result<Tensor> {
+    if count == 0 {
+        candle::bail!("top-k count must be greater than zero");
     }
-    Ok(())
-}
-
-fn sorted_score_indices(scores: &Tensor) -> Result<Tensor> {
-    validate_scores_values(scores)?;
-    scores.arg_sort_last_dim(true)
+    let samples = scores.dim(1)?;
+    if count > samples {
+        candle::bail!("top-k count {count} cannot exceed samples {samples}");
+    }
+    scores.arg_sort_last_dim(true)?.narrow(1, 0, count)
 }
 
 fn select_elites(candidates: &Tensor, scores: &Tensor, elite_count: usize) -> Result<Tensor> {
@@ -1261,7 +1293,7 @@ fn select_elites(candidates: &Tensor, scores: &Tensor, elite_count: usize) -> Re
         candle::bail!("elite_count {elite_count} cannot exceed samples {samples}");
     }
 
-    let elite_indices = sorted_score_indices(scores)?.narrow(1, 0, elite_count)?;
+    let elite_indices = lowest_score_indices(scores, elite_count)?;
     gather_candidate_sequences(candidates, &elite_indices)
 }
 
@@ -1309,8 +1341,7 @@ mod tests {
             &[[3., 1.], [7., 5.]]
         );
 
-        let sorted_indices = sorted_score_indices(&scores)?;
-        let best_indices = sorted_indices.narrow(1, 0, 1)?;
+        let best_indices = lowest_score_indices(&scores, 1)?;
         let sequences = gather_candidate_sequences(&candidates, &best_indices)?.squeeze(1)?;
 
         assert_eq!(best_indices_from_tensor(&best_indices)?, &[3, 3]);
@@ -1319,12 +1350,15 @@ mod tests {
     }
 
     #[test]
-    fn sorted_score_indices_rejects_non_finite_scores() -> Result<()> {
+    fn lowest_score_indices_returns_requested_count() -> Result<()> {
         let device = Device::new_cuda(0)?;
-        let scores = Tensor::new(&[[0f32, f32::INFINITY]], &device)?;
-        let err = sorted_score_indices(&scores).unwrap_err();
+        let scores = Tensor::new(&[[3f32, 1., 4., 0.5], [9., -1., 2., -2.]], &device)?;
+        let indices = lowest_score_indices(&scores, 3)?;
 
-        assert!(err.to_string().contains("non-finite"));
+        assert_eq!(
+            indices.to_vec2::<u32>()?,
+            &[[3, 1, 0], [3, 1, 2]]
+        );
         Ok(())
     }
 

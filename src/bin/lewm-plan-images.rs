@@ -16,7 +16,7 @@ use stable_worldmodel_candle::{
     models::lewm::{LeWm, LeWmConfig},
     planner::{
         CandidateScorer, CemConfig, CemPlanner, IcemConfig, IcemPlanner, LeWmGoalScorer,
-        MppiConfig, MppiPlanner, PlanResult,
+        MppiConfig, MppiPlanner, PlanDeviceResult,
     },
     runtime::{DTypeSpec, DeviceSpec},
     session::LeWmSession,
@@ -197,16 +197,17 @@ fn main() -> anyhow::Result<()> {
     })?;
     let scorer = LeWmGoalScorer::new(&session, &goal_emb);
 
-    let (plan_result, plan_ms) = timed_cuda(&device, || {
+    let (plan_device_result, plan_ms) = timed_cuda(&device, || {
         run_planner(&args, &scorer, horizon, args.samples, elites, action_dim)
     })?;
-    let selected_sequence = plan_result.sequence.clone();
+    let selected_sequence = plan_device_result.sequence.clone();
     let selected_sequence_for_score = selected_sequence.unsqueeze(1)?;
     let (selected_cost_tensor, selected_score_ms) = timed_cuda(&device, || {
         scorer
             .score_candidates(&selected_sequence_for_score)
             .map_err(anyhow::Error::from)
     })?;
+    let plan_result = plan_device_result.materialize()?;
 
     let first_action = plan_result
         .first_action
@@ -393,7 +394,7 @@ fn run_planner(
     samples: usize,
     elites: usize,
     action_dim: usize,
-) -> anyhow::Result<PlanResult> {
+) -> anyhow::Result<PlanDeviceResult> {
     match args.planner {
         PlannerArg::Cem => {
             let mut cfg = CemConfig::new(horizon, samples, elites, action_dim);
@@ -402,7 +403,7 @@ fn run_planner(
             cfg.min_std = args.min_std;
             cfg.seed = args.seed;
             CemPlanner::new(cfg)
-                .plan(scorer)
+                .plan_device(scorer)
                 .map_err(anyhow::Error::from)
         }
         PlannerArg::Mppi => {
@@ -412,7 +413,7 @@ fn run_planner(
             cfg.temperature = args.temperature;
             cfg.seed = args.seed;
             MppiPlanner::new(cfg)
-                .plan(scorer)
+                .plan_device(scorer)
                 .map_err(anyhow::Error::from)
         }
         PlannerArg::Icem => {
@@ -423,7 +424,7 @@ fn run_planner(
             cfg.min_std = args.min_std;
             cfg.seed = args.seed;
             let mut planner = IcemPlanner::new(cfg);
-            planner.plan(scorer).map_err(anyhow::Error::from)
+            planner.plan_device(scorer).map_err(anyhow::Error::from)
         }
     }
 }
