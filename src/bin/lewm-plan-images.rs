@@ -67,6 +67,9 @@ struct Args {
     #[arg(long)]
     horizon: Option<usize>,
 
+    #[arg(long)]
+    history_size: Option<usize>,
+
     #[arg(long, default_value_t = 1024)]
     samples: usize,
 
@@ -126,11 +129,15 @@ fn main() -> anyhow::Result<()> {
         Some(path) => LeWmConfig::from_stable_worldmodel_json_file(path)?,
         None => LeWmConfig::tiny_patch14_224(2),
     };
-    let history = cfg.history_size;
+    let checkpoint_history = cfg.history_size;
+    let history = args.history_size.unwrap_or(checkpoint_history);
+    if history == 0 {
+        anyhow::bail!("--history-size must be greater than zero");
+    }
     let action_dim = cfg.action_encoder.input_dim;
     let horizon = args.horizon.unwrap_or_else(|| history.max(5));
     if horizon < history {
-        anyhow::bail!("--horizon {horizon} must be >= LeWM history size {history}");
+        anyhow::bail!("--horizon {horizon} must be >= input history size {history}");
     }
     let elites = args
         .elites
@@ -241,6 +248,7 @@ fn main() -> anyhow::Result<()> {
         "dtype": args.dtype.to_string(),
         "planner": format!("{:?}", args.planner).to_ascii_lowercase(),
         "history_size": history,
+        "checkpoint_history_size": checkpoint_history,
         "horizon": horizon,
         "samples": args.samples,
         "elites": elites,

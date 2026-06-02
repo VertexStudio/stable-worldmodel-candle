@@ -38,6 +38,10 @@ predictable and deployment practical.
 - `lewm-plan-images` runs a real LeWM checkpoint from JPEG current/goal images
   through nvJPEG, Candle CUDA preprocessing, LeWM encode/rollout/scoring, and a
   Rust planner, then emits HTML plus JSON.
+- `tools/run_pusht_lewm_rust_demo.py` runs the actual `swm/PushT-v1` env from
+  a real `pusht_expert_train.h5` start/goal sample, executes Rust-planned LeWM
+  actions, and emits an HTML/JSON/GIF rollout report. Latest run: dataset row
+  `209214`, two iCEM replans, `47` executed actions, success `true`.
 - `tools/benchmark_lewm_plan_images_python.py` compares the same real-image
   LeWM planning workload against official Python/PyTorch inference.
 - Upstream `stable-worldmodel` support is tracked in

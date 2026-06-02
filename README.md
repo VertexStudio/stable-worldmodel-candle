@@ -173,85 +173,105 @@ Latest real PushT checkpoint run, 2026-06-02 on an NVIDIA GeForce RTX 4090:
 | MPPI | `10.074890` | `4.410488` | `24.726 ms` |
 | iCEM | `9.702090` | `4.783288` | `25.457 ms` |
 
-Real-checkpoint LeWM image planning uses JPEG inputs directly through the
-NVIDIA media path, then writes an HTML report plus JSON metrics:
+Real PushT LeWM planning uses the actual `swm/PushT-v1` environment, the
+public `quentinll/lewm-pusht` checkpoint, and real frames from
+`~/.stable_worldmodel/pusht_expert_train.h5`. The H5 stores pixels with the
+Blosc filter, so the Python tooling includes `hdf5plugin`.
 
 ```bash
 uv run --locked --no-dev \
-  python tools/make_benchmark_media.py \
-  --jpeg-output target/examples/current.jpg \
-  --image-size 224 \
-  --seed 11
-
-uv run --locked --no-dev \
-  python tools/make_benchmark_media.py \
-  --jpeg-output target/examples/goal.jpg \
-  --image-size 224 \
-  --seed 29
-
-cargo run --release --locked --features hub --bin lewm-plan-images -- \
+  python tools/run_pusht_lewm_rust_demo.py \
+  --output-dir target/reports/pusht-real-demo \
   --hf-repo quentinll/lewm-pusht \
-  --current target/examples/current.jpg \
-  --goal target/examples/goal.jpg \
   --planner icem \
   --samples 1024 \
   --iterations 5 \
+  --horizon 5 \
+  --history-size 1 \
+  --replans 2 \
   --seed 7 \
-  --output target/reports/lewm-pusht-rust-plan.html
+  --eval-seed 42 \
+  --eval-index 0 \
+  --open
+
+cargo run --release --locked --features hub --bin lewm-plan-images -- \
+  --hf-repo quentinll/lewm-pusht \
+  --current target/reports/pusht-real-demo/input/dataset-current.jpg \
+  --goal target/reports/pusht-real-demo/input/dataset-goal.jpg \
+  --planner icem \
+  --samples 1024 \
+  --iterations 5 \
+  --horizon 5 \
+  --history-size 1 \
+  --seed 7 \
+  --output target/reports/pusht-real-demo/lewm-pusht-rust-plan-r00.html
 
 uv run --locked --no-dev \
   python tools/benchmark_lewm_plan_images_python.py \
   --model quentinll/lewm-pusht \
-  --current target/examples/current.jpg \
-  --goal target/examples/goal.jpg \
+  --current target/reports/pusht-real-demo/input/dataset-current.jpg \
+  --goal target/reports/pusht-real-demo/input/dataset-goal.jpg \
   --planner icem \
   --samples 1024 \
   --iterations 5 \
+  --horizon 5 \
+  --history-size 1 \
   --seed 7 \
-  --output target/reports/lewm-pusht-python-plan.json
+  --output target/reports/pusht-real-demo/lewm-pusht-python-plan-r00.json
 ```
 
 ![LeWM real-image Python vs Rust CUDA planning benchmark](docs/lewm-image-plan-python-rust-benchmark.svg)
 
-Latest real image-planning smoke, 2026-06-02 on an NVIDIA GeForce RTX 4090:
+Latest real PushT planning run, 2026-06-02 on an NVIDIA GeForce RTX 4090:
 
-- Rust output: `target/reports/lewm-pusht-rust-plan.html` and
-  `target/reports/lewm-pusht-rust-plan.json`.
-- Python output: `target/reports/lewm-pusht-python-plan.json`.
+- Demo output: `target/reports/pusht-real-demo/pusht-demo.html`,
+  `target/reports/pusht-real-demo/pusht-demo.json`, and
+  `target/reports/pusht-real-demo/rollout/rollout.gif`.
+- Rust planner outputs:
+  `target/reports/pusht-real-demo/lewm-pusht-rust-plan-r00.json` and
+  `target/reports/pusht-real-demo/lewm-pusht-rust-plan-r01.json`.
+- Python comparison output:
+  `target/reports/pusht-real-demo/lewm-pusht-python-plan-r00.json`.
 - Checkpoint: `quentinll/lewm-pusht`, Hugging Face snapshot
   `22b330c28c27ead4bfd1888615af1340e3fe9052`.
-- Setup: generated 224x224 JPEG current and goal images, history size `3`,
-  horizon `5`, action dim `10`, iCEM samples `1024`, elites `256`,
-  iterations `5`, seed `7`.
+- Dataset sample: row `209214`, episode `1694`, start step `63`, goal row
+  `209239`, goal offset `25`.
+- Setup: real PushT H5 current/goal images, history size `1`, checkpoint
+  history size `3`, horizon `5`, action dim `10`, iCEM samples `1024`,
+  elites `256`, iterations `5`, planner seed `7`.
+- Rust env demo: two replans, `47` executed env actions, success `true`,
+  final distance `28.178723`, planner costs `95.319412 -> 33.028206`,
+  total planner time `513.175 ms`.
 - Candidate RNG is backend-native: Rust uses cuRAND through Candle/cudarc,
   Python uses PyTorch CUDA RNG. Compare workload latency and cost distribution;
   identical first actions are not expected from this run.
 
 | Stage | Rust CUDA | Python CUDA | Python/Rust |
 | --- | ---: | ---: | ---: |
-| Current JPEG decode + preprocess | `15.923 ms` | `26.747 ms` | `1.68x` |
-| Goal JPEG decode + preprocess | `0.460 ms` | `1.699 ms` | `3.69x` |
-| Current LeWM encode | `122.177 ms` | `128.793 ms` | `1.05x` |
-| Goal LeWM encode | `2.745 ms` | `3.503 ms` | `1.28x` |
-| iCEM planning | `203.473 ms` | `238.083 ms` | `1.17x` |
-| Selected-score pass | `7.987 ms` | `9.796 ms` | `1.23x` |
+| Current JPEG decode + preprocess | `16.673 ms` | `20.175 ms` | `1.21x` |
+| Goal JPEG decode + preprocess | `0.120 ms` | `0.824 ms` | `6.87x` |
+| Current LeWM encode | `143.124 ms` | `137.283 ms` | `0.96x` |
+| Goal LeWM encode | `2.798 ms` | `3.557 ms` | `1.27x` |
+| iCEM planning | `261.153 ms` | `256.130 ms` | `0.98x` |
+| Selected-score pass | `17.992 ms` | `19.714 ms` | `1.10x` |
 
 | Metric | Rust CUDA | Python CUDA |
 | --- | ---: | ---: |
-| Selected cost | `11.930494` | `11.865830` |
-| Final candidate best | `11.930492` | `11.865828` |
-| Final candidate mean | `15.119639` | `15.038874` |
-| Final candidate p50 | `14.196554` | `14.094571` |
-| Final candidate p95 | `20.818665` | `20.615538` |
+| Selected cost | `95.319412` | `52.160725` |
+| Final candidate best | `95.319305` | `52.160690` |
+| Final candidate mean | `217.092865` | `222.353424` |
+| Final candidate p50 | `207.558655` | `208.755234` |
+| Final candidate p95 | `306.528168` | `320.742249` |
 
 Regenerate the LeWM image-planning graph:
 
 ```bash
 uv run --locked --no-dev \
   python tools/plot_lewm_image_plan_comparison.py \
-  --python target/reports/lewm-pusht-python-plan.json \
-  --rust target/reports/lewm-pusht-rust-plan.json \
-  --output docs/lewm-image-plan-python-rust-benchmark.svg
+  --python target/reports/pusht-real-demo/lewm-pusht-python-plan-r00.json \
+  --rust target/reports/pusht-real-demo/lewm-pusht-rust-plan-r00.json \
+  --output docs/lewm-image-plan-python-rust-benchmark.svg \
+  --title "LeWM PushT Image Planning Latency"
 ```
 
 TD-MPC2 state/vector fixture export uses a deterministic Python model and saves

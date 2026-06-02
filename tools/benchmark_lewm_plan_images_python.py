@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", choices=("cuda",), default="cuda")
     parser.add_argument("--planner", choices=("cem", "mppi", "icem"), default="icem")
     parser.add_argument("--horizon", type=int, default=None)
+    parser.add_argument("--history-size", type=int, default=None)
     parser.add_argument("--samples", type=int, default=1024)
     parser.add_argument("--elites", type=int, default=None)
     parser.add_argument("--iterations", type=int, default=5)
@@ -75,7 +76,10 @@ def main() -> None:
         device, lambda: load_pretrained(args.model, cache_dir=args.cache_dir).to(device).eval()
     )
     action_dim = model.action_encoder.input_dim
-    history = model.predictor.num_frames
+    checkpoint_history = model.predictor.num_frames
+    history = args.history_size or checkpoint_history
+    if history <= 0:
+        raise ValueError("--history-size must be greater than zero")
     horizon = args.horizon or max(history, 5)
     if horizon < history:
         raise ValueError(f"--horizon {horizon} must be >= model history size {history}")
@@ -129,6 +133,7 @@ def main() -> None:
         "dtype": "f32",
         "planner": args.planner,
         "history_size": history,
+        "checkpoint_history_size": checkpoint_history,
         "horizon": horizon,
         "samples": args.samples,
         "elites": elites,
