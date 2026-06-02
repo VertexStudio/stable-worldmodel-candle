@@ -470,6 +470,60 @@ rows, run on 2026-06-01:
   This debug smoke emitted `media_packed`, `media_nv12`, `ffi_plan_cem`,
   `ffi_plan_mppi`, and `ffi_plan_icem` sections.
 
+## Python Vs Rust Benchmark
+
+The first direct Python-vs-Rust timing comparison is state-only TD-MPC2 model
+inference on CUDA. It compares the official Python/PyTorch implementation
+against Rust/Candle for common model sections only: encode, dynamics, candidate
+scoring, full encode+dynamics+score, actor mean rollout, and sampled actor
+rollout. Media ingestion and Rust-native planners are not included in this
+chart because there is no matching Python hot-path surface for those rows.
+
+![TD-MPC2 Python vs Rust CUDA inference benchmark](docs/tdmpc2-python-rust-benchmark.svg)
+
+Latest local comparison, run on 2026-06-02 on an NVIDIA GeForce RTX 4090:
+
+- Shape: batch `1`, state dim `12`, action dim `10`, samples `64`, horizon `5`.
+- Python: PyTorch `2.12.0+cu130`, CUDA `13.0`, official
+  `stable_worldmodel.wm.tdmpc2.TDMPC2`.
+- Rust: `runtime-bench --model td-mpc2`, commit `73f9ddb`.
+- Metric in the graph: p50 latency over 50 timed iterations after 10 warmup
+  iterations. Lower is faster; the right-side multiplier is Python p50 divided
+  by Rust p50.
+
+Reproduce and regenerate the graph:
+
+```bash
+mkdir -p target/bench
+
+uv run --locked --no-dev \
+  python tools/benchmark_tdmpc2_python.py \
+  --warmup 10 \
+  --iters 50 \
+  --batch-size 1 \
+  --samples 64 \
+  --horizon 5 \
+  --action-dim 10 \
+  --json-output target/bench/tdmpc2-python-cuda.json
+
+cargo run --release --locked --bin runtime-bench -- \
+  --model td-mpc2 \
+  --device cuda \
+  --warmup 10 \
+  --iters 50 \
+  --samples 64 \
+  --horizon 5 \
+  --planner-iterations 2 \
+  --action-dim 10 \
+  --json > target/bench/tdmpc2-rust-cuda.json
+
+uv run --locked --no-dev \
+  python tools/plot_benchmark_comparison.py \
+  --python target/bench/tdmpc2-python-cuda.json \
+  --rust target/bench/tdmpc2-rust-cuda.json \
+  --output docs/tdmpc2-python-rust-benchmark.svg
+```
+
 ## Runtime Sessions
 
 The library exposes initial family-specific session wrappers for repeated

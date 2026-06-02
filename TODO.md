@@ -65,6 +65,8 @@ predictable and deployment practical.
 - `runtime-bench` reports p50/p95/p99 runtime measurements for synthetic LeWM
   and TD-MPC2 paths, including packed-image/NV12 CUDA preprocessing and
   TD-MPC2 CEM/MPPI/iCEM planning latency.
+- Python-vs-Rust TD-MPC2 CUDA inference benchmarking now exists for common
+  model sections, with a generated SVG comparison graph in `docs/`.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
 - TD-MPC2 actor-mean and stochastic sampled policy rollouts run through Candle
   CUDA tensors and are exposed through the Rust model API, session API,

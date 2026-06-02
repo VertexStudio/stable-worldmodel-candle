@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="500" viewBox="0 0 1120 500" role="img">
+<style>
+text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;fill:#172026}
+.title{font-size:28px;font-weight:760}.sub{font-size:14px;fill:#52606d}.label{font-size:15px;font-weight:650}
+.value{font-size:13px;fill:#303b45}.axis{stroke:#d7dde3;stroke-width:1}.py{fill:#c2410c}.rs{fill:#0f766e}
+.grid{stroke:#edf1f5;stroke-width:1}.speed{font-size:13px;font-weight:700;fill:#172026}
+</style>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text class="title" x="28" y="38">TD-MPC2 CUDA Inference Latency</text>
+<text class="sub" x="28" y="62">Metric: p50_ms. Lower is faster. Synthetic state-only TD-MPC2 on CUDA.</text>
+<text class="sub" x="180" y="82">Python / PyTorch</text>
+<rect class="py" x="305" y="70" width="14" height="14" rx="2"/>
+<text class="sub" x="335" y="82">Rust / Candle</text>
+<rect class="rs" x="430" y="70" width="14" height="14" rx="2"/>
+<line class="grid" x1="180.0" y1="88" x2="180.0" y2="472"/>
+<text class="sub" x="180.0" y="490" text-anchor="middle">0.0ms</text>
+<line class="grid" x1="355.0" y1="88" x2="355.0" y2="472"/>
+<text class="sub" x="355.0" y="490" text-anchor="middle">0.8ms</text>
+<line class="grid" x1="530.0" y1="88" x2="530.0" y2="472"/>
+<text class="sub" x="530.0" y="490" text-anchor="middle">1.7ms</text>
+<line class="grid" x1="705.0" y1="88" x2="705.0" y2="472"/>
+<text class="sub" x="705.0" y="490" text-anchor="middle">2.5ms</text>
+<line class="grid" x1="880.0" y1="88" x2="880.0" y2="472"/>
+<text class="sub" x="880.0" y="490" text-anchor="middle">3.3ms</text>
+<line class="axis" x1="180" y1="472" x2="880" y2="472"/>
+<text class="label" x="28" y="115">encode</text>
+<rect class="py" x="180" y="96" width="26.8" height="18" rx="4"/>
+<rect class="rs" x="180" y="120" width="13.1" height="18" rx="4"/>
+<text class="value" x="214.8" y="110" text-anchor="start">0.127 ms</text>
+<text class="value" x="201.1" y="134" text-anchor="start">0.062 ms</text>
+<text class="speed" x="904" y="123">2.04x</text>
+<text class="label" x="28" y="177">dynamics</text>
+<rect class="py" x="180" y="158" width="51.0" height="18" rx="4"/>
+<rect class="rs" x="180" y="182" width="43.5" height="18" rx="4"/>
+<text class="value" x="239.0" y="172" text-anchor="start">0.242 ms</text>
+<text class="value" x="231.5" y="196" text-anchor="start">0.206 ms</text>
+<text class="speed" x="904" y="185">1.17x</text>
+<text class="label" x="28" y="239">score</text>
+<rect class="py" x="180" y="220" width="622.9" height="18" rx="4"/>
+<rect class="rs" x="180" y="244" width="543.9" height="18" rx="4"/>
+<text class="value" x="794.9" y="234" text-anchor="end">2.958 ms</text>
+<text class="value" x="731.9" y="258" text-anchor="start">2.583 ms</text>
+<text class="speed" x="904" y="247">1.15x</text>
+<text class="label" x="28" y="301">full</text>
+<rect class="py" x="180" y="282" width="700.0" height="18" rx="4"/>
+<rect class="rs" x="180" y="306" width="602.6" height="18" rx="4"/>
+<text class="value" x="872.0" y="296" text-anchor="end">3.324 ms</text>
+<text class="value" x="790.6" y="320" text-anchor="start">2.862 ms</text>
+<text class="speed" x="904" y="309">1.16x</text>
+<text class="label" x="28" y="363">policy_rollout</text>
+<rect class="py" x="180" y="344" width="364.0" height="18" rx="4"/>
+<rect class="rs" x="180" y="368" width="371.9" height="18" rx="4"/>
+<text class="value" x="552.0" y="358" text-anchor="start">1.729 ms</text>
+<text class="value" x="559.9" y="382" text-anchor="start">1.766 ms</text>
+<text class="speed" x="904" y="371">0.98x</text>
+<text class="label" x="28" y="425">policy_sample</text>
+<rect class="py" x="180" y="406" width="326.5" height="18" rx="4"/>
+<rect class="rs" x="180" y="430" width="298.8" height="18" rx="4"/>
+<text class="value" x="514.5" y="420" text-anchor="start">1.550 ms</text>
+<text class="value" x="486.8" y="444" text-anchor="start">1.419 ms</text>
+<text class="speed" x="904" y="433">1.09x</text>
+</svg>
