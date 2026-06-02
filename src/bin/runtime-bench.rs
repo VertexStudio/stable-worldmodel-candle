@@ -1,8 +1,12 @@
 use std::{
     ffi::CStr,
+    path::PathBuf,
     process::Command,
     time::{Duration, Instant},
 };
+
+#[cfg(feature = "nvjpeg")]
+use std::fs;
 
 use candle::{IndexOp, Tensor};
 use clap::{Parser, ValueEnum};
@@ -27,6 +31,9 @@ use stable_worldmodel_candle::{
     runtime::{DTypeSpec, DeviceSpec},
     session::TdMpc2Session,
 };
+
+#[cfg(feature = "nvjpeg")]
+use stable_worldmodel_candle::media::nvjpeg::NvJpegDecoder;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ModelArg {
@@ -74,6 +81,9 @@ struct Args {
 
     #[arg(long, default_value_t = 10)]
     action_dim: usize,
+
+    #[arg(long)]
+    jpeg_input: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +99,10 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     if args.iters == 0 {
         anyhow::bail!("--iters must be greater than zero");
+    }
+    #[cfg(not(feature = "nvjpeg"))]
+    if args.jpeg_input.is_some() {
+        anyhow::bail!("--jpeg-input requires building runtime-bench with --features nvjpeg");
     }
 
     let device = args.device.resolve()?;
@@ -125,6 +139,7 @@ fn main() -> anyhow::Result<()> {
                 "elites": elite_count(&args),
                 "warmup": args.warmup,
                 "iters": args.iters,
+                "jpeg_input": args.jpeg_input.as_ref().map(|path| path.display().to_string()),
                 "stats": rows,
             }))?
         );
@@ -351,6 +366,8 @@ fn bench_tdmpc2(
     let (nv12_y, nv12_uv) = nv12_tensors(nv12_shape, device)?;
     let mut nv12_preprocessor =
         Nv12Preprocessor::new(device, nv12_shape, Nv12ColorSpace::Bt709Video, media_config)?;
+    #[cfg(feature = "nvjpeg")]
+    let mut jpeg_media = JpegMediaBench::new(args, device, media_config)?;
 
     let session_model = TdMpc2::new(
         TdMpc2Config::state_only(args.state_dim, args.action_dim),
@@ -423,117 +440,168 @@ fn bench_tdmpc2(
         min_std: 1e-3,
     };
 
-    Ok(vec![
-        bench("media_packed", args, device, || {
-            packed_preprocessor.preprocess_packed_u8(&packed_pixels)?;
-            Ok(())
-        })?,
-        bench("media_nv12", args, device, || {
-            nv12_preprocessor.preprocess_nv12(&nv12_y, &nv12_uv)?;
-            Ok(())
-        })?,
-        bench("encode", args, device, || {
-            model.encode_state(&state)?;
-            Ok(())
-        })?,
-        bench("dynamics", args, device, || {
-            model.forward(&z, &action)?;
-            Ok(())
-        })?,
-        bench("score", args, device, || {
-            model.get_cost_state(&state, &action_candidates)?;
-            Ok(())
-        })?,
-        bench("full", args, device, || {
-            let z = model.encode_state(&state)?;
-            let _ = model.forward(&z, &action)?;
-            model.get_cost_state(&state, &action_candidates)?;
-            Ok(())
-        })?,
-        bench("policy_rollout", args, device, || {
-            model.rollout_actor_mean(&z, args.horizon)?;
-            Ok(())
-        })?,
-        bench("policy_sample", args, device, || {
-            model.rollout_actor_sampled(&z, args.horizon, args.samples)?;
-            Ok(())
-        })?,
-        bench("ffi_actor_mean", args, device, || {
-            let status =
-                unsafe { swm_tdmpc2_actor_mean_action(&mut ffi_handle, ffi_action.as_mut_ptr()) };
-            ensure_ffi_status(status)
-        })?,
-        bench("ffi_policy_roll", args, device, || {
-            let status = unsafe {
-                swm_tdmpc2_rollout_actor_mean(
-                    &mut ffi_handle,
-                    args.horizon,
-                    ffi_policy_actions.as_mut_ptr(),
-                    ffi_policy_rewards.as_mut_ptr(),
-                )
-            };
-            ensure_ffi_status(status)
-        })?,
-        bench("ffi_policy_samp", args, device, || {
-            let status = unsafe {
-                swm_tdmpc2_rollout_actor_sample(
-                    &mut ffi_handle,
-                    args.horizon,
-                    args.samples,
-                    ffi_policy_actions.as_mut_ptr(),
-                )
-            };
-            ensure_ffi_status(status)
-        })?,
-        bench("plan_cem", args, device, || {
-            cem.plan(&session)?;
-            Ok(())
-        })?,
-        bench("ffi_plan_cem", args, device, || {
-            let status = unsafe {
-                swm_tdmpc2_plan_cem(
-                    &mut ffi_handle,
-                    ffi_cem_cfg,
-                    ffi_action.as_mut_ptr(),
-                    ffi_plan_sequence.as_mut_ptr(),
-                    ffi_plan_cost.as_mut_ptr(),
-                )
-            };
-            ensure_ffi_status(status)
-        })?,
-        bench("ffi_plan_mppi", args, device, || {
-            let status = unsafe {
-                swm_tdmpc2_plan_mppi(
-                    &mut ffi_handle,
-                    ffi_mppi_cfg,
-                    ffi_action.as_mut_ptr(),
-                    ffi_plan_sequence.as_mut_ptr(),
-                    ffi_plan_cost.as_mut_ptr(),
-                )
-            };
-            ensure_ffi_status(status)
-        })?,
-        bench("ffi_plan_icem", args, device, || {
-            let status = unsafe {
-                swm_tdmpc2_plan_icem(
-                    &mut ffi_handle,
-                    ffi_icem_cfg,
-                    ffi_action.as_mut_ptr(),
-                    ffi_plan_sequence.as_mut_ptr(),
-                    ffi_plan_cost.as_mut_ptr(),
-                )
-            };
-            ensure_ffi_status(status)
-        })?,
-        bench("plan_mppi", args, device, || {
-            mppi.plan(&session)?;
-            Ok(())
-        })?,
-        bench("plan_icem", args, device, || {
-            icem.plan(&session)?;
-            Ok(())
-        })?,
-    ])
+    let mut rows = Vec::new();
+    #[cfg(feature = "nvjpeg")]
+    if let Some(jpeg_media) = jpeg_media.as_mut() {
+        rows.push(bench("media_jpeg", args, device, || jpeg_media.run())?);
+    }
+    rows.push(bench("media_packed", args, device, || {
+        packed_preprocessor.preprocess_packed_u8(&packed_pixels)?;
+        Ok(())
+    })?);
+    rows.push(bench("media_nv12", args, device, || {
+        nv12_preprocessor.preprocess_nv12(&nv12_y, &nv12_uv)?;
+        Ok(())
+    })?);
+    rows.push(bench("encode", args, device, || {
+        model.encode_state(&state)?;
+        Ok(())
+    })?);
+    rows.push(bench("dynamics", args, device, || {
+        model.forward(&z, &action)?;
+        Ok(())
+    })?);
+    rows.push(bench("score", args, device, || {
+        model.get_cost_state(&state, &action_candidates)?;
+        Ok(())
+    })?);
+    rows.push(bench("full", args, device, || {
+        let z = model.encode_state(&state)?;
+        let _ = model.forward(&z, &action)?;
+        model.get_cost_state(&state, &action_candidates)?;
+        Ok(())
+    })?);
+    rows.push(bench("policy_rollout", args, device, || {
+        model.rollout_actor_mean(&z, args.horizon)?;
+        Ok(())
+    })?);
+    rows.push(bench("policy_sample", args, device, || {
+        model.rollout_actor_sampled(&z, args.horizon, args.samples)?;
+        Ok(())
+    })?);
+    rows.push(bench("ffi_actor_mean", args, device, || {
+        let status =
+            unsafe { swm_tdmpc2_actor_mean_action(&mut ffi_handle, ffi_action.as_mut_ptr()) };
+        ensure_ffi_status(status)
+    })?);
+    rows.push(bench("ffi_policy_roll", args, device, || {
+        let status = unsafe {
+            swm_tdmpc2_rollout_actor_mean(
+                &mut ffi_handle,
+                args.horizon,
+                ffi_policy_actions.as_mut_ptr(),
+                ffi_policy_rewards.as_mut_ptr(),
+            )
+        };
+        ensure_ffi_status(status)
+    })?);
+    rows.push(bench("ffi_policy_samp", args, device, || {
+        let status = unsafe {
+            swm_tdmpc2_rollout_actor_sample(
+                &mut ffi_handle,
+                args.horizon,
+                args.samples,
+                ffi_policy_actions.as_mut_ptr(),
+            )
+        };
+        ensure_ffi_status(status)
+    })?);
+    rows.push(bench("plan_cem", args, device, || {
+        cem.plan(&session)?;
+        Ok(())
+    })?);
+    rows.push(bench("ffi_plan_cem", args, device, || {
+        let status = unsafe {
+            swm_tdmpc2_plan_cem(
+                &mut ffi_handle,
+                ffi_cem_cfg,
+                ffi_action.as_mut_ptr(),
+                ffi_plan_sequence.as_mut_ptr(),
+                ffi_plan_cost.as_mut_ptr(),
+            )
+        };
+        ensure_ffi_status(status)
+    })?);
+    rows.push(bench("ffi_plan_mppi", args, device, || {
+        let status = unsafe {
+            swm_tdmpc2_plan_mppi(
+                &mut ffi_handle,
+                ffi_mppi_cfg,
+                ffi_action.as_mut_ptr(),
+                ffi_plan_sequence.as_mut_ptr(),
+                ffi_plan_cost.as_mut_ptr(),
+            )
+        };
+        ensure_ffi_status(status)
+    })?);
+    rows.push(bench("ffi_plan_icem", args, device, || {
+        let status = unsafe {
+            swm_tdmpc2_plan_icem(
+                &mut ffi_handle,
+                ffi_icem_cfg,
+                ffi_action.as_mut_ptr(),
+                ffi_plan_sequence.as_mut_ptr(),
+                ffi_plan_cost.as_mut_ptr(),
+            )
+        };
+        ensure_ffi_status(status)
+    })?);
+    rows.push(bench("plan_mppi", args, device, || {
+        mppi.plan(&session)?;
+        Ok(())
+    })?);
+    rows.push(bench("plan_icem", args, device, || {
+        icem.plan(&session)?;
+        Ok(())
+    })?);
+    Ok(rows)
+}
+
+#[cfg(feature = "nvjpeg")]
+struct JpegMediaBench {
+    encoded: Vec<u8>,
+    decoder: NvJpegDecoder,
+    rgb_output: Tensor,
+    preprocessor: ImagePreprocessor,
+}
+
+#[cfg(feature = "nvjpeg")]
+impl JpegMediaBench {
+    fn new(
+        args: &Args,
+        device: &candle::Device,
+        config: ImagePreprocess,
+    ) -> anyhow::Result<Option<Self>> {
+        let Some(path) = args.jpeg_input.as_ref() else {
+            return Ok(None);
+        };
+        if args.batch_size != 1 {
+            anyhow::bail!("--jpeg-input benchmark row currently requires --batch-size 1");
+        }
+
+        let encoded = fs::read(path).map_err(|err| {
+            anyhow::anyhow!("failed to read JPEG input {}: {err}", path.display())
+        })?;
+        let decoder = NvJpegDecoder::new(device)?;
+        let info = decoder.image_info(&encoded)?;
+        let rgb_output = decoder.alloc_rgb_interleaved(info)?;
+        let preprocessor = ImagePreprocessor::new(device, info.packed_rgb_shape(), config)?;
+        Ok(Some(Self {
+            encoded,
+            decoder,
+            rgb_output,
+            preprocessor,
+        }))
+    }
+
+    fn run(&mut self) -> anyhow::Result<()> {
+        self.decoder.decode_preprocessed_nchw_into(
+            &self.encoded,
+            &self.rgb_output,
+            &mut self.preprocessor,
+        )?;
+        Ok(())
+    }
 }
 
 fn ensure_ffi_status(status: SwmStatus) -> anyhow::Result<()> {

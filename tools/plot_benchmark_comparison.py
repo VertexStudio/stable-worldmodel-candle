@@ -9,7 +9,15 @@ import json
 from pathlib import Path
 
 
-DEFAULT_NAMES = ["encode", "dynamics", "score", "full", "policy_rollout", "policy_sample"]
+DEFAULT_NAMES = [
+    "media_jpeg",
+    "encode",
+    "dynamics",
+    "score",
+    "full",
+    "policy_rollout",
+    "policy_sample",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -18,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rust", required=True, type=Path, dest="rust_json")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--metric", default="p50_ms", choices=("mean_ms", "p50_ms", "p95_ms", "p99_ms"))
-    parser.add_argument("--title", default="TD-MPC2 CUDA Inference Latency")
+    parser.add_argument("--title", default="TD-MPC2 CUDA Runtime Latency")
     parser.add_argument("--names", nargs="*", default=DEFAULT_NAMES)
     return parser.parse_args()
 
@@ -68,7 +76,7 @@ def render_svg(title: str, metric: str, rows: list[tuple[str, float, float, floa
         "</style>",
         '<rect width="100%" height="100%" fill="#ffffff"/>',
         f'<text class="title" x="28" y="38">{html.escape(title)}</text>',
-        f'<text class="sub" x="28" y="62">Metric: {html.escape(metric)}. Lower is faster. Synthetic state-only TD-MPC2 on CUDA.</text>',
+        f'<text class="sub" x="28" y="62">Metric: {html.escape(metric)}. Lower is faster. TD-MPC2 CUDA; media_jpeg includes decode and model-tensor preprocessing.</text>',
         f'<text class="sub" x="{left}" y="82">Python / PyTorch</text>',
         f'<rect class="py" x="{left + 125}" y="70" width="14" height="14" rx="2"/>',
         f'<text class="sub" x="{left + 155}" y="82">Rust / Candle</text>',

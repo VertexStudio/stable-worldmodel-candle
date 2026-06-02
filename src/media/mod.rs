@@ -8,7 +8,7 @@ pub mod nvdec;
 #[cfg(feature = "nvjpeg")]
 pub mod nvjpeg;
 
-use std::{ffi::c_void, fmt};
+use std::{ffi::c_void, fmt, sync::OnceLock};
 
 use candle::{
     CudaStorage, DType, Device, InplaceOp2, InplaceOp3, Layout, Result, Storage, Tensor,
@@ -655,19 +655,13 @@ impl InplaceOp2 for PackedU8ToNchwF32 {
         let input = contiguous_slice(input, input_layout, "packed image input")?;
         let mut output = contiguous_slice_mut(&mut output, output_layout, "model image output")?;
 
-        let ptx = nvrtc::safe::compile_ptx_with_opts(
+        let ptx = cached_media_ptx(
+            &PACKED_U8_TO_NCHW_F32_PTX,
             PACKED_U8_TO_NCHW_F32_CUDA,
-            nvrtc::CompileOptions {
-                use_fast_math: Some(true),
-                ..Default::default()
-            },
-        )
-        .w()?;
-        let func = cuda.get_or_load_custom_func(
-            "swm_packed_u8_to_nchw_f32",
-            "swm_media_preprocess",
-            &ptx.to_src(),
+            "packed-u8-to-nchw-f32",
         )?;
+        let func =
+            cuda.get_or_load_custom_func("swm_packed_u8_to_nchw_f32", "swm_media_preprocess", ptx)?;
 
         let elem_count =
             self.input_shape.batch * 3 * self.config.output_height * self.config.output_width;
@@ -755,19 +749,13 @@ impl InplaceOp3 for Nv12ToNchwF32 {
         let uv_plane = contiguous_slice(uv_plane, uv_layout, "NV12 UV plane")?;
         let mut output = contiguous_slice_mut(&mut output, output_layout, "model image output")?;
 
-        let ptx = nvrtc::safe::compile_ptx_with_opts(
+        let ptx = cached_media_ptx(
+            &NV12_TO_NCHW_F32_PTX,
             NV12_TO_NCHW_F32_CUDA,
-            nvrtc::CompileOptions {
-                use_fast_math: Some(true),
-                ..Default::default()
-            },
-        )
-        .w()?;
-        let func = cuda.get_or_load_custom_func(
-            "swm_nv12_to_nchw_f32",
-            "swm_cuda_nv12_preprocess",
-            &ptx.to_src(),
+            "nv12-to-nchw-f32",
         )?;
+        let func =
+            cuda.get_or_load_custom_func("swm_nv12_to_nchw_f32", "swm_cuda_nv12_preprocess", ptx)?;
 
         let pixel_count =
             self.input_shape.batch * self.config.output_height * self.config.output_width;
@@ -1096,6 +1084,31 @@ pub fn tensor_from_cuda_slice_f32(
 ) -> Tensor {
     let storage = CudaStorage::wrap_cuda_slice(slice, device);
     Tensor::from_storage(Storage::Cuda(storage), shape, BackpropOp::none(), false)
+}
+
+static PACKED_U8_TO_NCHW_F32_PTX: OnceLock<std::result::Result<String, String>> = OnceLock::new();
+static NV12_TO_NCHW_F32_PTX: OnceLock<std::result::Result<String, String>> = OnceLock::new();
+
+fn cached_media_ptx(
+    cache: &'static OnceLock<std::result::Result<String, String>>,
+    source: &'static str,
+    name: &'static str,
+) -> Result<&'static str> {
+    let cached = cache.get_or_init(|| {
+        nvrtc::safe::compile_ptx_with_opts(
+            source,
+            nvrtc::CompileOptions {
+                use_fast_math: Some(true),
+                ..Default::default()
+            },
+        )
+        .map(|ptx| ptx.to_src())
+        .map_err(|err| err.to_string())
+    });
+    match cached {
+        Ok(ptx) => Ok(ptx.as_str()),
+        Err(err) => candle::bail!("{name} NVRTC compile failed: {err}"),
+    }
 }
 
 const PACKED_U8_TO_NCHW_F32_CUDA: &str = r#"

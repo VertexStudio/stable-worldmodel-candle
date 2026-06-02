@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import subprocess
@@ -12,7 +13,9 @@ import time
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
 import torch
+from PIL import Image
 
 
 class DotDict(dict):
@@ -41,6 +44,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-dim", type=int, default=12)
     parser.add_argument("--action-dim", type=int, default=10)
     parser.add_argument("--seed", type=int, default=11)
+    parser.add_argument("--image-size", type=int, default=64)
+    parser.add_argument(
+        "--jpeg-input",
+        type=Path,
+        help="JPEG file used for encoded image ingestion benchmark",
+    )
     parser.add_argument("--json-output", type=Path)
     return parser.parse_args()
 
@@ -76,6 +85,8 @@ def main() -> None:
         raise ValueError("--samples must be greater than zero")
     if args.horizon <= 0:
         raise ValueError("--horizon must be greater than zero")
+    if args.image_size <= 0:
+        raise ValueError("--image-size must be greater than zero")
 
     if args.stable_worldmodel_root:
         sys.path.insert(0, str(Path(args.stable_worldmodel_root).resolve()))
@@ -96,6 +107,7 @@ def main() -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("Python benchmark requires torch.cuda.is_available()")
     device = torch.device(args.device)
+    jpeg_bytes = read_or_make_jpeg(args)
 
     actor_trajs = args.actor_trajs or args.samples
     model = TDMPC2(tdmpc2_cfg(args)).to(device).eval()
@@ -124,6 +136,7 @@ def main() -> None:
 
     with torch.inference_mode():
         rows = [
+            bench("media_jpeg", args, lambda: python_media_jpeg(jpeg_bytes, args.batch_size, device)),
             bench("encode", args, lambda: model.encode(obs)),
             bench("dynamics", args, lambda: model.forward(z, action)),
             bench("score", args, lambda: model.get_cost(obs, action_candidates)),
@@ -150,6 +163,9 @@ def main() -> None:
         "samples": args.samples,
         "horizon": args.horizon,
         "actor_trajs": actor_trajs,
+        "image_size": args.image_size,
+        "jpeg_input": str(args.jpeg_input) if args.jpeg_input else "generated-in-memory",
+        "media_jpeg": "JPEG bytes -> Pillow RGB decode -> NumPy HWC -> CUDA F32 NCHW /255",
         "warmup": args.warmup,
         "iters": args.iters,
         "torch": torch.__version__,
@@ -163,6 +179,47 @@ def main() -> None:
         args.json_output.parent.mkdir(parents=True, exist_ok=True)
         args.json_output.write_text(text + "\n", encoding="utf-8")
     print(text)
+
+
+def read_or_make_jpeg(args: argparse.Namespace) -> bytes:
+    if args.jpeg_input:
+        return args.jpeg_input.read_bytes()
+
+    rng = np.random.default_rng(args.seed)
+    image = synthetic_rgb_image(args.image_size, rng)
+    buffer = io.BytesIO()
+    Image.fromarray(image, mode="RGB").save(
+        buffer,
+        format="JPEG",
+        quality=95,
+        subsampling=0,
+        optimize=False,
+    )
+    return buffer.getvalue()
+
+
+def synthetic_rgb_image(size: int, rng: np.random.Generator) -> np.ndarray:
+    axis = np.linspace(0, 255, size, dtype=np.uint8)
+    xx, yy = np.meshgrid(axis, axis)
+    noise = rng.integers(0, 16, size=(size, size), dtype=np.uint8)
+    return np.stack(
+        [
+            xx,
+            yy,
+            ((xx.astype(np.uint16) + yy.astype(np.uint16)) // 2 + noise).astype(np.uint8),
+        ],
+        axis=-1,
+    )
+
+
+def python_media_jpeg(jpeg_bytes: bytes, batch_size: int, device: torch.device) -> torch.Tensor:
+    frames = []
+    for _ in range(batch_size):
+        with Image.open(io.BytesIO(jpeg_bytes)) as image:
+            frames.append(np.asarray(image.convert("RGB"), dtype=np.uint8))
+    hwc = np.stack(frames, axis=0)
+    nchw = np.transpose(hwc, (0, 3, 1, 2)).copy()
+    return torch.from_numpy(nchw).to(device=device, dtype=torch.float32).mul_(1.0 / 255.0)
 
 
 def full_step(model, obs, state, action, action_candidates):

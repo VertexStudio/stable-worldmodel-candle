@@ -472,29 +472,49 @@ rows, run on 2026-06-01:
 
 ## Python Vs Rust Benchmark
 
-The first direct Python-vs-Rust timing comparison is state-only TD-MPC2 model
-inference on CUDA. It compares the official Python/PyTorch implementation
-against Rust/Candle for common model sections only: encode, dynamics, candidate
-scoring, full encode+dynamics+score, actor mean rollout, and sampled actor
-rollout. Media ingestion and Rust-native planners are not included in this
-chart because there is no matching Python hot-path surface for those rows.
+The direct Python-vs-Rust timing comparison tracks TD-MPC2 CUDA runtime work
+that both stacks can execute. The first row is encoded image ingestion:
+Python decodes JPEG bytes with Pillow, converts RGB HWC data into a CUDA F32
+NCHW tensor, and normalizes by 255. Rust decodes the same JPEG bytes through
+nvJPEG into a Candle CUDA U8 RGB tensor, then runs the fused CUDA preprocessing
+kernel into the model tensor. The remaining rows compare official
+Python/PyTorch TD-MPC2 model sections against Rust/Candle: encode, dynamics,
+candidate scoring, full encode+dynamics+score, actor mean rollout, and sampled
+actor rollout.
+
+Rust-only media rows are still reported by `runtime-bench`: `media_packed`
+measures CUDA-resident packed RGB preprocessing, and `media_nv12` measures
+CUDA-resident NV12 colorspace/resize/normalization preprocessing for video
+surfaces. Rust-native planners are reported by `runtime-bench` as separate
+deployment rows because Python planner comparison is a separate benchmark
+surface.
 
 ![TD-MPC2 Python vs Rust CUDA inference benchmark](docs/tdmpc2-python-rust-benchmark.svg)
 
 Latest local comparison, run on 2026-06-02 on an NVIDIA GeForce RTX 4090:
 
-- Shape: batch `1`, state dim `12`, action dim `10`, samples `64`, horizon `5`.
+- Shape: 64x64 JPEG image, batch `1`, state dim `12`, action dim `10`,
+  samples `64`, horizon `5`.
 - Python: PyTorch `2.12.0+cu130`, CUDA `13.0`, official
-  `stable_worldmodel.wm.tdmpc2.TDMPC2`.
-- Rust: `runtime-bench --model td-mpc2`, commit `73f9ddb`.
+  `stable_worldmodel.wm.tdmpc2.TDMPC2`, Pillow JPEG decode.
+- Rust: `runtime-bench --model td-mpc2` built with `--features nvjpeg`,
+  nvJPEG decode, and Candle CUDA preprocessing.
 - Metric in the graph: p50 latency over 50 timed iterations after 10 warmup
   iterations. Lower is faster; the right-side multiplier is Python p50 divided
   by Rust p50.
+- Encoded JPEG ingestion p50: Python `0.187 ms`, Rust `0.037 ms`, `5.11x`.
+- Rust-only hot media rows from the same release run: `media_packed`
+  `0.007 ms`, `media_nv12` `0.007 ms`.
 
 Reproduce and regenerate the graph:
 
 ```bash
 mkdir -p target/bench
+
+uv run --locked --no-dev \
+  python tools/make_benchmark_media.py \
+  --jpeg-output target/bench/media64.jpg \
+  --image-size 64
 
 uv run --locked --no-dev \
   python tools/benchmark_tdmpc2_python.py \
@@ -504,9 +524,10 @@ uv run --locked --no-dev \
   --samples 64 \
   --horizon 5 \
   --action-dim 10 \
+  --jpeg-input target/bench/media64.jpg \
   --json-output target/bench/tdmpc2-python-cuda.json
 
-cargo run --release --locked --bin runtime-bench -- \
+cargo run --release --locked --features nvjpeg --bin runtime-bench -- \
   --model td-mpc2 \
   --device cuda \
   --warmup 10 \
@@ -515,6 +536,7 @@ cargo run --release --locked --bin runtime-bench -- \
   --horizon 5 \
   --planner-iterations 2 \
   --action-dim 10 \
+  --jpeg-input target/bench/media64.jpg \
   --json > target/bench/tdmpc2-rust-cuda.json
 
 uv run --locked --no-dev \
