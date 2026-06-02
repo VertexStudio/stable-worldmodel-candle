@@ -5,7 +5,6 @@
 //! execution.
 
 pub mod nvdec;
-#[cfg(feature = "nvjpeg")]
 pub mod nvjpeg;
 
 use std::{ffi::c_void, fmt, sync::OnceLock};

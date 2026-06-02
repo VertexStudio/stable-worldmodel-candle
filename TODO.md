@@ -35,6 +35,12 @@ predictable and deployment practical.
 - `lewm-plan-fixture` runs CEM/MPPI/iCEM against real LeWM fixture inputs and
   public checkpoints; the latest PushT run improves over the fixture candidate
   baseline with all three solvers.
+- `lewm-plan-images` runs a real LeWM checkpoint from JPEG current/goal images
+  through nvJPEG, Candle CUDA preprocessing, LeWM encode/rollout/scoring, and a
+  Rust planner, then emits HTML plus JSON.
+- Upstream `stable-worldmodel` support is tracked in
+  `docs/upstream-stable-worldmodel.md`; current audited commit is
+  `40dff37fc983c5276ada65eb1c7873cefbcccd8a`.
 - TD-MPC2 state/vector inference and CUDA fixture parity exist.
 - Python parity tooling now runs from this repo's `pyproject.toml`/`uv.lock`
   and depends on the official `stable-worldmodel[train]` package.

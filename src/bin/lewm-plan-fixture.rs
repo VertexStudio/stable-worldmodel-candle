@@ -332,21 +332,21 @@ fn resolve_files(args: &Args) -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
     resolve_hf_files(repo, args.revision.as_deref())
 }
 
-#[cfg(feature = "hub")]
 fn resolve_hf_files(
     repo: &str,
     revision: Option<&str>,
 ) -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
-    let files = hub::download_stable_worldmodel_checkpoint(repo, revision)?;
-    Ok((files.weights, Some(files.config)))
-}
+    #[cfg(feature = "hub")]
+    {
+        let files = hub::download_stable_worldmodel_checkpoint(repo, revision)?;
+        return Ok((files.weights, Some(files.config)));
+    }
 
-#[cfg(not(feature = "hub"))]
-fn resolve_hf_files(
-    _repo: &str,
-    _revision: Option<&str>,
-) -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
-    anyhow::bail!("--hf-repo requires building with --features hub")
+    #[cfg(not(feature = "hub"))]
+    {
+        let _ = (repo, revision);
+        anyhow::bail!("--hf-repo requires building with --features hub");
+    }
 }
 
 fn git_commit() -> String {

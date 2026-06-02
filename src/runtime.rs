@@ -111,14 +111,6 @@ fn parse_index(input: &str, prefix: &str) -> std::result::Result<Option<usize>, 
         .map_err(|_| format!("invalid device index '{raw}' after '{prefix}'"))
 }
 
-#[cfg(feature = "cuda")]
 fn cuda_device(index: usize) -> Result<Device> {
     Device::new_cuda(index)
-}
-
-#[cfg(not(feature = "cuda"))]
-fn cuda_device(_index: usize) -> Result<Device> {
-    candle::bail!(
-        "CUDA device requested, but this crate was built without the CUDA/cuDNN feature stack"
-    )
 }

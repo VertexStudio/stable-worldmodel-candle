@@ -1,16 +1,15 @@
 use std::{
     ffi::CStr,
+    fs,
     path::PathBuf,
     process::Command,
     time::{Duration, Instant},
 };
 
-#[cfg(feature = "nvjpeg")]
-use std::fs;
-
 use candle::{IndexOp, Tensor};
 use clap::{Parser, ValueEnum};
 use serde_json::json;
+use stable_worldmodel_candle::media::nvjpeg::NvJpegDecoder;
 use stable_worldmodel_candle::{
     checkpoint,
     ffi::{
@@ -31,9 +30,6 @@ use stable_worldmodel_candle::{
     runtime::{DTypeSpec, DeviceSpec},
     session::TdMpc2Session,
 };
-
-#[cfg(feature = "nvjpeg")]
-use stable_worldmodel_candle::media::nvjpeg::NvJpegDecoder;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ModelArg {
@@ -100,11 +96,6 @@ fn main() -> anyhow::Result<()> {
     if args.iters == 0 {
         anyhow::bail!("--iters must be greater than zero");
     }
-    #[cfg(not(feature = "nvjpeg"))]
-    if args.jpeg_input.is_some() {
-        anyhow::bail!("--jpeg-input requires building runtime-bench with --features nvjpeg");
-    }
-
     let device = args.device.resolve()?;
     let dtype = args.dtype.dtype();
     let stats = match args.model {
@@ -373,7 +364,6 @@ fn bench_tdmpc2(
     let (nv12_y, nv12_uv) = nv12_tensors(nv12_shape, device)?;
     let mut nv12_preprocessor =
         Nv12Preprocessor::new(device, nv12_shape, Nv12ColorSpace::Bt709Video, media_config)?;
-    #[cfg(feature = "nvjpeg")]
     let mut jpeg_media = JpegMediaBench::new(args, device, media_config)?;
 
     let session_model = TdMpc2::new(
@@ -448,7 +438,6 @@ fn bench_tdmpc2(
     };
 
     let mut rows = Vec::new();
-    #[cfg(feature = "nvjpeg")]
     if let Some(jpeg_media) = jpeg_media.as_mut() {
         rows.push(bench("media_jpeg", args, device, || jpeg_media.run())?);
     }
@@ -568,7 +557,6 @@ fn bench_tdmpc2(
     Ok(rows)
 }
 
-#[cfg(feature = "nvjpeg")]
 struct JpegMediaBench {
     encoded: Vec<u8>,
     decoder: NvJpegDecoder,
@@ -576,7 +564,6 @@ struct JpegMediaBench {
     preprocessor: ImagePreprocessor,
 }
 
-#[cfg(feature = "nvjpeg")]
 impl JpegMediaBench {
     fn new(
         args: &Args,

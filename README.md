@@ -58,6 +58,8 @@ compatibility is not a reason to keep slower runtime paths in this crate.
   `stable-worldmodel[train]` package, deterministic CUDA fixture exporters,
   LeWM and TD-MPC2 parity comparators, real LeWM fixture planning, cost argmin
   checks, and runtime benchmarks.
+- Upstream support tracking: the audited `stable-worldmodel` commit is recorded
+  in [docs/upstream-stable-worldmodel.md](docs/upstream-stable-worldmodel.md).
 - CUDA smoke-test CLIs:
 
 ```bash
@@ -171,6 +173,48 @@ Latest real PushT checkpoint run, 2026-06-02 on an NVIDIA GeForce RTX 4090:
 | MPPI | `10.074890` | `4.410488` | `24.726 ms` |
 | iCEM | `9.702090` | `4.783288` | `25.457 ms` |
 
+Real-checkpoint LeWM image planning uses JPEG inputs directly through the
+NVIDIA media path, then writes an HTML report plus JSON metrics:
+
+```bash
+uv run --locked --no-dev \
+  python tools/make_benchmark_media.py \
+  --jpeg-output target/examples/current.jpg \
+  --image-size 224 \
+  --seed 11
+
+uv run --locked --no-dev \
+  python tools/make_benchmark_media.py \
+  --jpeg-output target/examples/goal.jpg \
+  --image-size 224 \
+  --seed 29
+
+cargo run --release --locked --features hub --bin lewm-plan-images -- \
+  --hf-repo quentinll/lewm-pusht \
+  --current target/examples/current.jpg \
+  --goal target/examples/goal.jpg \
+  --planner icem \
+  --samples 1024 \
+  --iterations 5 \
+  --seed 7 \
+  --output target/reports/lewm-pusht-plan.html
+```
+
+Latest real image-planning smoke, 2026-06-02 on an NVIDIA GeForce RTX 4090:
+
+- Output: `target/reports/lewm-pusht-plan.html` and
+  `target/reports/lewm-pusht-plan.json`.
+- Checkpoint: `quentinll/lewm-pusht`, Hugging Face snapshot
+  `22b330c28c27ead4bfd1888615af1340e3fe9052`.
+- Setup: generated 224x224 JPEG current and goal images, history size `3`,
+  horizon `5`, action dim `10`, iCEM samples `1024`, elites `256`,
+  iterations `5`, seed `7`.
+- Planner result: selected cost `11.930494`, final candidate best
+  `11.930492`, final mean `15.119639`, p50 `14.196554`, p95 `20.818665`.
+- Timings: current JPEG decode/preprocess `18.651 ms`, goal JPEG
+  decode/preprocess `0.470 ms`, current encode `133.049 ms`, goal encode
+  `2.747 ms`, planning `215.742 ms`, selected-score pass `8.668 ms`.
+
 TD-MPC2 state/vector fixture export uses a deterministic Python model and saves
 both an `.npz` fixture and a `.pt` state dict:
 
@@ -272,10 +316,9 @@ SimNorm.
 
 ## NVIDIA Media Runtime
 
-Required CUDA/cuDNN builds expose `media` for NVIDIA media ingestion. With the
-`nvjpeg` feature enabled, JPEG bytes are decoded by NVIDIA nvJPEG directly into a
-Candle CUDA `U8` tensor on Candle's CUDA stream, then the fused CUDA
-preprocessor produces model-ready tensors:
+Required CUDA/cuDNN builds expose `media` for NVIDIA media ingestion. JPEG bytes
+are decoded by NVIDIA nvJPEG directly into a Candle CUDA `U8` tensor on Candle's
+CUDA stream, then the fused CUDA preprocessor produces model-ready tensors:
 
 ```text
 encoded JPEG bytes
@@ -349,8 +392,8 @@ Build and validate the NVIDIA media path:
 cargo test --locked media::nvdec -- --nocapture
 cargo test --locked ffi_nvdec -- --nocapture
 cargo test media -- --nocapture
-cargo check --features nvjpeg --all-targets
-cargo test --features nvjpeg media -- --nocapture
+cargo check --all-targets
+cargo test media -- --nocapture
 ```
 
 For a real H.264 Annex B parser/map/copy smoke, generate a one-frame stream
@@ -542,8 +585,8 @@ Latest local comparison, run on 2026-06-02 on an NVIDIA GeForce RTX 4090:
   samples `64`, horizon `5`.
 - Python: PyTorch `2.12.0+cu130`, CUDA `13.0`, official
   `stable_worldmodel.wm.tdmpc2.TDMPC2`, Pillow JPEG decode.
-- Rust: `runtime-bench --model td-mpc2` built with `--features nvjpeg`,
-  nvJPEG decode, and Candle CUDA preprocessing.
+- Rust: `runtime-bench --model td-mpc2`, nvJPEG decode, and Candle CUDA
+  preprocessing.
 - Metric in the graph: p50 latency over 50 timed iterations after 10 warmup
   iterations. Lower is faster; the right-side multiplier is Python p50 divided
   by Rust p50.
@@ -574,7 +617,7 @@ uv run --locked --no-dev \
   --jpeg-input target/bench/media64.jpg \
   --json-output target/bench/tdmpc2-python-cuda.json
 
-cargo run --release --locked --features nvjpeg --bin runtime-bench -- \
+cargo run --release --locked --bin runtime-bench -- \
   --model td-mpc2 \
   --device cuda \
   --warmup 10 \

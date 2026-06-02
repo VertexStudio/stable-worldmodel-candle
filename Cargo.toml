@@ -11,19 +11,15 @@ clap = { version = "4.6.1", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 
-candle = { package = "candle-core", version = "0.10.2" }
-candle-nn = { package = "candle-nn", version = "0.10.2" }
-candle-transformers = { version = "0.10.2" }
+candle = { package = "candle-core", version = "0.10.2", features = ["cuda", "cudnn"] }
+candle-nn = { package = "candle-nn", version = "0.10.2", features = ["cuda", "cudnn"] }
+candle-transformers = { version = "0.10.2", features = ["cuda", "cudnn"] }
 
 hf-hub = { version = "0.5.0", default-features = false, features = ["ureq"], optional = true }
-nvjpeg-sys = { version = "0.1.0", optional = true }
+nvjpeg-sys = "0.1.0"
 
 [features]
-default = ["cudnn"]
 hub = ["dep:hf-hub"]
-cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
-cudnn = ["cuda", "candle/cudnn", "candle-nn/cudnn", "candle-transformers/cudnn"]
-nvjpeg = ["cudnn", "dep:nvjpeg-sys"]
 
 [lib]
 name = "stable_worldmodel_candle"
@@ -45,6 +41,10 @@ path = "src/bin/lewm-compare-fixture.rs"
 [[bin]]
 name = "lewm-plan-fixture"
 path = "src/bin/lewm-plan-fixture.rs"
+
+[[bin]]
+name = "lewm-plan-images"
+path = "src/bin/lewm-plan-images.rs"
 
 [[bin]]
 name = "runtime-bench"
