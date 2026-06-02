@@ -56,8 +56,8 @@ compatibility is not a reason to keep slower runtime paths in this crate.
   Hub checkpoint download behind `--features hub`.
 - Validation tooling: repo-local `uv` environment using the official
   `stable-worldmodel[train]` package, deterministic CUDA fixture exporters,
-  LeWM and TD-MPC2 parity comparators, cost argmin checks, and runtime
-  benchmarks.
+  LeWM and TD-MPC2 parity comparators, real LeWM fixture planning, cost argmin
+  checks, and runtime benchmarks.
 - CUDA smoke-test CLIs:
 
 ```bash
@@ -127,6 +127,49 @@ cargo run --features hub --bin lewm-compare-fixture -- \
 
 The current verified PushT fixture covers pixel encoding, action embedding,
 single-step prediction, latent rollout, and goal cost.
+
+Real-checkpoint LeWM planning can be run against the same fixture and public
+checkpoint:
+
+```bash
+uv run --locked --no-dev \
+  python tools/export_lewm_fixture.py \
+  --model quentinll/lewm-pusht \
+  --device cuda \
+  --output target/lewm-pusht-real-python-cuda.npz
+
+cargo run --release --locked --features hub --bin lewm-compare-fixture -- \
+  --device cuda \
+  --fixture target/lewm-pusht-real-python-cuda.npz \
+  --hf-repo quentinll/lewm-pusht
+
+cargo run --release --locked --features hub --bin lewm-plan-fixture -- \
+  --device cuda \
+  --fixture target/lewm-pusht-real-python-cuda.npz \
+  --hf-repo quentinll/lewm-pusht \
+  --samples 128 \
+  --iterations 3 \
+  --seed 7 \
+  --json > target/bench/lewm-pusht-real-plan-cuda.json
+```
+
+Latest real PushT checkpoint run, 2026-06-02 on an NVIDIA GeForce RTX 4090:
+
+- Python fixture: official `stable_worldmodel`, PyTorch `2.12.0+cu130`, CUDA
+  `13.0`, checkpoint `quentinll/lewm-pusht`.
+- Candle CUDA parity against the fresh Python CUDA fixture:
+  `emb=5.731881e-4`, `act_emb=4.768372e-7`, `pred=7.328391e-4`,
+  `rollout=6.533712e-4`, `cost=5.619049e-3`; cost argmin was stable.
+- Planner setup: horizon `5`, samples `128`, elites `32`, iterations `3`,
+  action dim `10`, seed `7`, fixture candidate baseline best cost
+  `14.485378`.
+- Real Rust planner results against the PushT goal embedding:
+
+| Planner | Best cost | Improvement vs fixture baseline | Elapsed |
+| --- | ---: | ---: | ---: |
+| CEM | `9.718345` | `4.767034` | `40.448 ms` |
+| MPPI | `10.074890` | `4.410488` | `24.726 ms` |
+| iCEM | `9.702090` | `4.783288` | `25.457 ms` |
 
 TD-MPC2 state/vector fixture export uses a deterministic Python model and saves
 both an `.npz` fixture and a `.pt` state dict:

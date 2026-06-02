@@ -43,6 +43,10 @@ name = "lewm-compare-fixture"
 path = "src/bin/lewm-compare-fixture.rs"
 
 [[bin]]
+name = "lewm-plan-fixture"
+path = "src/bin/lewm-plan-fixture.rs"
+
+[[bin]]
 name = "runtime-bench"
 path = "src/bin/runtime-bench.rs"
 

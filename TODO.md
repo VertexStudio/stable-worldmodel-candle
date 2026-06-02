@@ -32,6 +32,9 @@ predictable and deployment practical.
 
 - LeWM image-model implementation exists.
 - LeWM Python/Candle CUDA parity exists through `tools/cuda_parity.sh`.
+- `lewm-plan-fixture` runs CEM/MPPI/iCEM against real LeWM fixture inputs and
+  public checkpoints; the latest PushT run improves over the fixture candidate
+  baseline with all three solvers.
 - TD-MPC2 state/vector inference and CUDA fixture parity exist.
 - Python parity tooling now runs from this repo's `pyproject.toml`/`uv.lock`
   and depends on the official `stable-worldmodel[train]` package.
@@ -299,6 +302,8 @@ overhead.
   CEM/MPPI/iCEM planning.
 - `runtime-bench --model le-wm` reports representative LeWM C ABI planner rows
   for CEM, MPPI, and iCEM.
+- `lewm-plan-fixture` validates real-checkpoint LeWM goal planning with
+  generated planner candidates, scored through `LeWmGoalScorer` on Candle CUDA.
 - `runtime-bench` reports `media_jpeg`, `media_packed`, and `media_nv12` rows
   so encoded image ingestion and image/video preprocessing kernels are tracked
   with the same p50/p95/p99 harness as model and planner work.
