@@ -230,6 +230,35 @@ Validation snapshot (2026-06-03, tiny LeWM batch-training CLI, RTX 4090):
 - Total loss: initial `4.54091215e0`, final `4.52249146e0`.
 - Output: `target/lewm-train-tiny-output.safetensors`.
 
+PushT H5 batches can be exported into the same NPZ contract:
+
+```bash
+uv run --locked --no-dev \
+  python tools/export_pusht_lewm_training_batch.py \
+  --output target/pusht-lewm-training-batch.npz \
+  --batch-size 2 \
+  --history-size 3 \
+  --action-block 5 \
+  --seed 7
+
+cargo run --release --locked --bin lewm-train-batch -- \
+  --device cuda \
+  --batch-npz target/pusht-lewm-training-batch.npz \
+  --steps 1 \
+  --lr 1e-5 \
+  --output target/pusht-lewm-trained-smoke.safetensors
+```
+
+Validation snapshot (2026-06-03, PushT H5 LeWM batch training, RTX 4090):
+
+- Dataset: `~/.stable_worldmodel/pusht_expert_train.h5`, rows `1459998` and
+  `2206878`.
+- Batch: pixels `(2,3,3,224,224)`, actions `(2,3,10)`, normalized action
+  blocks of five 2D PushT actions.
+- Total loss: initial `6.78525972e0`, final `6.72897959e0` after one AdamW
+  update at `lr=1e-5`.
+- Output: `target/pusht-lewm-trained-smoke.safetensors`.
+
 The PushT environment demo uses `swm/PushT-v1`, the public
 `quentinll/lewm-pusht` checkpoint, and frames from
 `~/.stable_worldmodel/pusht_expert_train.h5`. The H5 stores pixels with the

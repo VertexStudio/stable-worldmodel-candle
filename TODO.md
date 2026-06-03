@@ -98,6 +98,8 @@ predictable and deployment practical.
   checkpoint loader.
 - `lewm-train-batch` trains from fixed NPZ pixel/action batches on CUDA and
   writes updated safetensors.
+- `tools/export_pusht_lewm_training_batch.py` exports PushT H5 image/action
+  histories into the NPZ contract consumed by `lewm-train-batch`.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
 - TD-MPC2 actor-mean and stochastic sampled policy rollouts run through Candle
   CUDA tensors and are exposed through the Rust model API, session API,
@@ -476,11 +478,16 @@ focus on NVIDIA CUDA.
   mini-batches. A 2026-06-03 tiny CUDA run moved total loss from
   `4.54091215e0` to `4.52249146e0` over two AdamW steps and saved
   `target/lewm-train-tiny-output.safetensors`.
+- `tools/export_pusht_lewm_training_batch.py` exported PushT rows `1459998` and
+  `2206878` into model-ready pixels `(2,3,3,224,224)` and normalized action
+  blocks `(2,3,10)`. `lewm-train-batch` ran one full LeWM CUDA AdamW step on
+  that batch, moving total loss from `6.78525972e0` to `6.72897959e0` and saving
+  `target/pusht-lewm-trained-smoke.safetensors`.
 
 **Done When**
 
 - Loss terms match official Python CUDA on fixed input batches before the update.
-- A short overfit run on a PushT batch shows decreasing loss without
+- A longer overfit run on a PushT batch shows sustained decreasing loss without
   Python in the model/loss/optimizer step.
 
 ## Standard Checks
