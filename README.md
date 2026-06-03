@@ -202,10 +202,11 @@ Validation snapshot (2026-06-03, LeWM training-loss parity, RTX 4090):
   `std_loss=0`, `std_t_loss=0`, `cov_loss=2.980232e-8`, `cov_t_loss=0`,
   `temporal_straightening_loss=0`.
 - Rust CUDA training-step smoke:
-  `cargo test --locked lewm_training_step_updates_cuda_weights -- --nocapture`
+  `cargo test --locked lewm_training_step_updates_and_reloads_cuda_weights -- --nocapture`
   builds a tiny trainable LeWM through `candle_nn::VarMap`, computes the weighted
   batch loss, runs backward, applies AdamW, and verifies that model variables
-  update with finite pre/post losses.
+  update with finite pre/post losses. The test saves the updated weights as
+  safetensors and reloads them through the runtime checkpoint loader.
 
 The PushT environment demo uses `swm/PushT-v1`, the public
 `quentinll/lewm-pusht` checkpoint, and frames from

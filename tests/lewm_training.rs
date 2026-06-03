@@ -1,12 +1,21 @@
+use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use candle::{DType, Device, Tensor};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW, VarBuilder, VarMap};
-use stable_worldmodel_candle::models::lewm::{
-    ActionEmbedderConfig, LeWm, LeWmConfig, LeWmLossWeights, MlpConfig, NormKind, PredictorConfig,
-    VitEncoderConfig, batch_loss,
+use stable_worldmodel_candle::{
+    checkpoint,
+    models::lewm::{
+        ActionEmbedderConfig, LeWm, LeWmConfig, LeWmLossWeights, MlpConfig, NormKind,
+        PredictorConfig, VitEncoderConfig, batch_loss,
+    },
 };
 
 #[test]
-fn lewm_training_step_updates_cuda_weights() -> candle::Result<()> {
+fn lewm_training_step_updates_and_reloads_cuda_weights() -> candle::Result<()> {
     let device = Device::new_cuda(0)?;
     let cfg = tiny_training_config();
     let varmap = VarMap::new();
@@ -67,6 +76,17 @@ fn lewm_training_step_updates_cuda_weights() -> candle::Result<()> {
         .to_scalar::<f32>()?;
     assert!(loss_after.is_finite());
 
+    let weights_path = temp_safetensors_path();
+    varmap.save(&weights_path)?;
+    let reloaded_vb = checkpoint::var_builder_from_path(&weights_path, DType::F32, &device)?;
+    let reloaded = LeWm::new(cfg, reloaded_vb)?;
+    let reload_loss = batch_loss(&reloaded, &pixels, &actions, LeWmLossWeights::default())?
+        .total_loss
+        .to_scalar::<f32>()?;
+    assert!(reload_loss.is_finite());
+    assert!((reload_loss - loss_after).abs() < 1e-4);
+    fs::remove_file(weights_path)?;
+
     Ok(())
 }
 
@@ -115,4 +135,15 @@ fn tiny_training_config() -> LeWmConfig {
         },
         history_size,
     }
+}
+
+fn temp_safetensors_path() -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "stable-worldmodel-candle-lewm-training-{}-{stamp}.safetensors",
+        std::process::id()
+    ))
 }
