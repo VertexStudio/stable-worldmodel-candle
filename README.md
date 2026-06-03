@@ -58,6 +58,10 @@ compatibility is not a reason to keep slower runtime paths in this crate.
   `stable-worldmodel[train]` package, deterministic CUDA fixture exporters,
   LeWM and TD-MPC2 parity comparators, checkpoint-backed LeWM fixture planning,
   cost argmin checks, and runtime benchmarks.
+- LeWM training-loss parity: PLDM inverse-dynamics/temporal-alignment loss,
+  VCReg variance/covariance terms, and temporal-straightening loss are
+  implemented in Rust/Candle and compared against the official Python CUDA
+  outputs.
 - Upstream support tracking: the audited `stable-worldmodel` commit is recorded
   in [docs/upstream-stable-worldmodel.md](docs/upstream-stable-worldmodel.md).
 - CUDA inspection CLIs:
@@ -171,6 +175,31 @@ Validation snapshot (2026-06-02, LeWM PushT checkpoint, RTX 4090):
 | CEM | `9.718345` | `4.767034` | `40.448 ms` |
 | MPPI | `10.074890` | `4.410488` | `24.726 ms` |
 | iCEM | `9.702090` | `4.783288` | `25.457 ms` |
+
+LeWM training-loss parity validates the official Python loss modules against
+the Rust/Candle CUDA implementations on fixed latent/action tensors. This
+covers `PLDMLoss`, `VCReg`, and `TemporalStraighteningLoss`; it does not claim a
+complete optimizer/dataloader training stack.
+
+```bash
+uv run --locked --no-dev \
+  python tools/export_lewm_training_loss_fixture.py \
+  --device cuda \
+  --output target/lewm-training-loss-python-cuda.npz
+
+cargo run --release --locked --bin lewm-compare-training-loss -- \
+  --device cuda \
+  --fixture target/lewm-training-loss-python-cuda.npz \
+  --tolerance 1e-5
+```
+
+Validation snapshot (2026-06-03, LeWM training-loss parity, RTX 4090):
+
+- Python: official `stable_worldmodel`, PyTorch `2.12.0+cu130`, CUDA `13.0`.
+- Tensor shape: batch `4`, time `5`, latent dim `8`, action dim `3`.
+- Candle CUDA max abs: `idm_loss=0`, `temp_align_loss=1.192093e-7`,
+  `std_loss=0`, `std_t_loss=0`, `cov_loss=2.980232e-8`, `cov_t_loss=0`,
+  `temporal_straightening_loss=0`.
 
 The PushT environment demo uses `swm/PushT-v1`, the public
 `quentinll/lewm-pusht` checkpoint, and frames from

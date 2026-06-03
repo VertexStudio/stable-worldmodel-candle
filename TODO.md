@@ -90,6 +90,8 @@ predictable and deployment practical.
 - Python-vs-Rust LeWM image planning benchmarking reports synchronized CUDA
   p50/p95/p99 stats for repeated runs and regenerates the README graph from
   p50 latency.
+- LeWM PLDM, VCReg, and temporal-straightening training losses are implemented
+  in Rust/Candle and validated against the official Python CUDA loss modules.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
 - TD-MPC2 actor-mean and stochastic sampled policy rollouts run through Candle
   CUDA tensors and are exposed through the Rust model API, session API,
@@ -429,6 +431,43 @@ Expose the stable runtime without forcing a Python service.
   a small stable ABI.
 - TD-MPC2 and LeWM C ABI overhead are measured separately from core runtime
   latency.
+
+## Phase 10: LeWM Training Surfaces
+
+**Goal**
+
+Make the model/loss/optimizer step possible in Rust while keeping the runtime
+focus on NVIDIA CUDA.
+
+**Build**
+
+- Keep official CUDA parity for PLDM, VCReg, and temporal-straightening losses.
+- Add trainable LeWM construction through `candle_nn::VarMap` so gradients can
+  flow through the same model modules used for inference.
+- Add a batch loss API that accepts CUDA pixel/action tensors, encodes the
+  observation history, predicts latent transitions, and returns named loss
+  tensors.
+- Add an AdamW training-step harness over fixed mini-batches before adding
+  streaming dataset ingestion.
+- Add safetensors checkpoint save/load for the trained Rust weights.
+
+**Status**
+
+- `models::lewm::loss` implements PLDM inverse-dynamics MSE, temporal-alignment
+  MSE, VCReg variance/covariance terms, and temporal-straightening loss.
+- `tools/export_lewm_training_loss_fixture.py` exports official Python CUDA loss
+  outputs.
+- `lewm-compare-training-loss` validates Rust/Candle CUDA loss outputs against
+  the Python export. Validation snapshot on 2026-06-03: max abs
+  `1.192093e-7` across the tracked scalar loss outputs.
+
+**Done When**
+
+- A Rust LeWM training step runs forward, backward, and AdamW update on CUDA.
+- Loss terms match official Python CUDA on fixed input batches before the update.
+- Updated weights can be saved as safetensors and loaded by the inference path.
+- A short overfit run on a fixed PushT batch shows decreasing loss without
+  Python in the model/loss/optimizer step.
 
 ## Standard Checks
 
