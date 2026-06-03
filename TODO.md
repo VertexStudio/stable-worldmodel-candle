@@ -92,6 +92,9 @@ predictable and deployment practical.
   p50 latency.
 - LeWM PLDM, VCReg, and temporal-straightening training losses are implemented
   in Rust/Candle and validated against the official Python CUDA loss modules.
+- LeWM batch-loss training API accepts CUDA pixel/action tensors, runs model
+  forward loss computation, and is covered by a CUDA forward/backward/AdamW
+  smoke test.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
 - TD-MPC2 actor-mean and stochastic sampled policy rollouts run through Candle
   CUDA tensors and are exposed through the Rust model API, session API,
@@ -460,10 +463,14 @@ focus on NVIDIA CUDA.
 - `lewm-compare-training-loss` validates Rust/Candle CUDA loss outputs against
   the Python export. Validation snapshot on 2026-06-03: max abs
   `1.192093e-7` across the tracked scalar loss outputs.
+- `models::lewm::training::batch_loss` computes weighted prediction, PLDM/VCReg,
+  and temporal-straightening terms from CUDA pixel/action batches.
+- `lewm_training_step_updates_cuda_weights` builds a tiny trainable LeWM with
+  `candle_nn::VarMap`, runs backward, applies AdamW, and verifies CUDA variables
+  update.
 
 **Done When**
 
-- A Rust LeWM training step runs forward, backward, and AdamW update on CUDA.
 - Loss terms match official Python CUDA on fixed input batches before the update.
 - Updated weights can be saved as safetensors and loaded by the inference path.
 - A short overfit run on a fixed PushT batch shows decreasing loss without

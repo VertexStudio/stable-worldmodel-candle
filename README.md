@@ -61,7 +61,8 @@ compatibility is not a reason to keep slower runtime paths in this crate.
 - LeWM training-loss parity: PLDM inverse-dynamics/temporal-alignment loss,
   VCReg variance/covariance terms, and temporal-straightening loss are
   implemented in Rust/Candle and compared against the official Python CUDA
-  outputs.
+  outputs. A Rust batch-loss API also runs LeWM forward/backward with AdamW on
+  CUDA for fixed mini-batches.
 - Upstream support tracking: the audited `stable-worldmodel` commit is recorded
   in [docs/upstream-stable-worldmodel.md](docs/upstream-stable-worldmodel.md).
 - CUDA inspection CLIs:
@@ -179,7 +180,7 @@ Validation snapshot (2026-06-02, LeWM PushT checkpoint, RTX 4090):
 LeWM training-loss parity validates the official Python loss modules against
 the Rust/Candle CUDA implementations on fixed latent/action tensors. This
 covers `PLDMLoss`, `VCReg`, and `TemporalStraighteningLoss`; it does not claim a
-complete optimizer/dataloader training stack.
+complete dataloader training stack.
 
 ```bash
 uv run --locked --no-dev \
@@ -200,6 +201,11 @@ Validation snapshot (2026-06-03, LeWM training-loss parity, RTX 4090):
 - Candle CUDA max abs: `idm_loss=0`, `temp_align_loss=1.192093e-7`,
   `std_loss=0`, `std_t_loss=0`, `cov_loss=2.980232e-8`, `cov_t_loss=0`,
   `temporal_straightening_loss=0`.
+- Rust CUDA training-step smoke:
+  `cargo test --locked lewm_training_step_updates_cuda_weights -- --nocapture`
+  builds a tiny trainable LeWM through `candle_nn::VarMap`, computes the weighted
+  batch loss, runs backward, applies AdamW, and verifies that model variables
+  update with finite pre/post losses.
 
 The PushT environment demo uses `swm/PushT-v1`, the public
 `quentinll/lewm-pusht` checkpoint, and frames from
