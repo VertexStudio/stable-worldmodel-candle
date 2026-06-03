@@ -255,9 +255,14 @@ Validation snapshot (2026-06-03, PushT H5 LeWM batch training, RTX 4090):
   `2206878`.
 - Batch: pixels `(2,3,3,224,224)`, actions `(2,3,10)`, normalized action
   blocks of five 2D PushT actions.
-- Total loss: initial `6.78525972e0`, final `6.72897959e0` after one AdamW
-  update at `lr=1e-5`.
-- Output: `target/pusht-lewm-trained-smoke.safetensors`.
+- Random-initialized full LeWM tiny: total loss `6.78525972e0` to
+  `6.23445511e0` over ten AdamW steps at `lr=1e-5`; output
+  `target/pusht-lewm-trained-overfit10.safetensors`.
+- Checkpoint-initialized LeWM PushT: `weights.pt` converted to
+  `target/lewm-pusht-model.safetensors` with
+  `tools/convert_state_dict_safetensors.py`; total loss `2.20985317e0` to
+  `2.19493628e0` over three AdamW steps at `lr=1e-6`; output
+  `target/pusht-lewm-checkpoint-trained-smoke.safetensors`.
 
 The PushT environment demo uses `swm/PushT-v1`, the public
 `quentinll/lewm-pusht` checkpoint, and frames from

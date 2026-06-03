@@ -483,12 +483,18 @@ focus on NVIDIA CUDA.
   blocks `(2,3,10)`. `lewm-train-batch` ran one full LeWM CUDA AdamW step on
   that batch, moving total loss from `6.78525972e0` to `6.72897959e0` and saving
   `target/pusht-lewm-trained-smoke.safetensors`.
+- A longer random-initialized PushT run moved total loss from `6.78525972e0` to
+  `6.23445511e0` over ten AdamW steps. A checkpoint-initialized PushT run used
+  `target/lewm-pusht-model.safetensors` converted from the public
+  `quentinll/lewm-pusht` `weights.pt`, moved total loss from `2.20985317e0` to
+  `2.19493628e0` over three AdamW steps, and saved
+  `target/pusht-lewm-checkpoint-trained-smoke.safetensors`.
 
 **Done When**
 
 - Loss terms match official Python CUDA on fixed input batches before the update.
-- A longer overfit run on a PushT batch shows sustained decreasing loss without
-  Python in the model/loss/optimizer step.
+- Streaming PushT batch iteration runs through the Rust model/loss/optimizer
+  step and writes periodic safetensors checkpoints.
 
 ## Standard Checks
 
