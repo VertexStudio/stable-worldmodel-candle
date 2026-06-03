@@ -96,6 +96,8 @@ predictable and deployment practical.
   forward loss computation, and is covered by a CUDA forward/backward/AdamW
   smoke test that saves updated safetensors and reloads them through the runtime
   checkpoint loader.
+- `lewm-train-batch` trains from fixed NPZ pixel/action batches on CUDA and
+  writes updated safetensors.
 - Family-specific runtime session APIs exist for LeWM and TD-MPC2.
 - TD-MPC2 actor-mean and stochastic sampled policy rollouts run through Candle
   CUDA tensors and are exposed through the Rust model API, session API,
@@ -470,11 +472,15 @@ focus on NVIDIA CUDA.
   LeWM with `candle_nn::VarMap`, runs backward, applies AdamW, verifies CUDA
   variables update, saves safetensors, and reloads them through the runtime
   checkpoint loader.
+- `lewm-train-batch` is an executable Rust training entrypoint for fixed
+  mini-batches. A 2026-06-03 tiny CUDA run moved total loss from
+  `4.54091215e0` to `4.52249146e0` over two AdamW steps and saved
+  `target/lewm-train-tiny-output.safetensors`.
 
 **Done When**
 
 - Loss terms match official Python CUDA on fixed input batches before the update.
-- A short overfit run on a fixed PushT batch shows decreasing loss without
+- A short overfit run on a PushT batch shows decreasing loss without
   Python in the model/loss/optimizer step.
 
 ## Standard Checks

@@ -51,6 +51,10 @@ name = "lewm-compare-training-loss"
 path = "src/bin/lewm-compare-training-loss.rs"
 
 [[bin]]
+name = "lewm-train-batch"
+path = "src/bin/lewm-train-batch.rs"
+
+[[bin]]
 name = "runtime-bench"
 path = "src/bin/runtime-bench.rs"
 

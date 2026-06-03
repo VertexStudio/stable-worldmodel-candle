@@ -207,6 +207,28 @@ Validation snapshot (2026-06-03, LeWM training-loss parity, RTX 4090):
   batch loss, runs backward, applies AdamW, and verifies that model variables
   update with finite pre/post losses. The test saves the updated weights as
   safetensors and reloads them through the runtime checkpoint loader.
+- Rust batch-training CLI:
+  `lewm-train-batch` consumes an NPZ with `pixels` `[batch,time,3,H,W]` and
+  `actions` `[batch,time,action_dim]`, runs AdamW on CUDA, and writes updated
+  safetensors.
+
+```bash
+cargo run --release --locked --bin lewm-train-batch -- \
+  --device cuda \
+  --config /path/to/lewm-config.json \
+  --batch-npz /path/to/lewm-train-batch.npz \
+  --init-safetensors /path/to/model.safetensors \
+  --steps 100 \
+  --lr 1e-4 \
+  --output /path/to/updated-model.safetensors
+```
+
+Validation snapshot (2026-06-03, tiny LeWM batch-training CLI, RTX 4090):
+
+- Command path: `lewm-train-batch` on CUDA with a repo-native tiny LeWM config,
+  batch `2`, time `3`, 28x28 RGB pixels, action dim `2`, and two AdamW steps.
+- Total loss: initial `4.54091215e0`, final `4.52249146e0`.
+- Output: `target/lewm-train-tiny-output.safetensors`.
 
 The PushT environment demo uses `swm/PushT-v1`, the public
 `quentinll/lewm-pusht` checkpoint, and frames from
